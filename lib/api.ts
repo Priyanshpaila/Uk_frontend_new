@@ -1,5 +1,6 @@
 // lib/api.ts
 import type { Service } from "./types";
+import { notFound } from "next/navigation";
 
 /* ------------------- Env + helpers (same pattern as src/api.ts) ------------------- */
 
@@ -452,5 +453,64 @@ export async function getUserOrdersApi(
   return apiFetch<OrdersListResponse>(`/orders?${params.toString()}`, {
     method: "GET",
   });
+}
+
+
+// lib/pageApi.ts
+
+
+export type Page = {
+  _id: string;
+  title: string;
+  slug: string;
+  description?: string;
+  template?: string;
+  visibility?: string;
+  active?: boolean;
+  meta_title?: string;
+  meta_description?: string;
+  meta?: {
+    background?: {
+      enabled?: boolean;
+      background_upload?: string;
+      url?: string | null;
+      blur?: number | null;
+      overlay?: number | null;
+    } | null;
+  } | null;
+  status?: string;
+  content?: string;
+  rendered_html?: string;
+  gallery?: string[];
+  service_id?: string;
+};
+
+export const API_BASE =getBackendBase();
+
+/**
+ * Fetch a page by slug from: GET /pages/slug/:slug
+ */
+export async function fetchPageBySlug(slug: string): Promise<Page> {
+  if (!API_BASE) {
+    throw new Error("Missing env var");
+  }
+
+  const res = await fetch(
+    `${API_BASE}/pages/slug/${encodeURIComponent(slug)}`,
+    {
+      cache: "no-store",
+      next: { revalidate: 0 },
+    }
+  );
+
+  if (res.status === 404) {
+    notFound(); // Next.js 404 page
+  }
+
+  if (!res.ok) {
+    throw new Error(`Page fetch failed ${res.status}`);
+  }
+
+  return res.json();
 }
 
