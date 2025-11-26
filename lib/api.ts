@@ -411,8 +411,7 @@ async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const baseUrl =
-    process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api";
+  const baseUrl =getBackendBase();
 
   // however you get token – from cookies, localStorage, AuthContext, etc.
   const token =
@@ -427,7 +426,6 @@ async function apiFetch<T>(
       ...(options.headers || {}),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
-    credentials: "include",
   });
 
   if (!res.ok) {
