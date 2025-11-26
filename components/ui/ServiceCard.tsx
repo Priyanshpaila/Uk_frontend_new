@@ -40,7 +40,8 @@ export default function ServiceCard({ service }: { service: Service }) {
         </p>
       </div>
 
-      <div className="mt-2 flex items-center justify-between gap-2">
+      {/* Bottom row */}
+      <div className="mt-2 flex items-center justify-between gap-3">
         <div className="text-[11px] text-slate-500">
           Online consultation · Fast booking
         </div>
@@ -48,9 +49,9 @@ export default function ServiceCard({ service }: { service: Service }) {
         {/* CTA -> /private-services/[slug] */}
         <Link
           href={`/private-services/${encodeURIComponent(service.slug)}`}
-          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-cyan-800 transition group-hover:border-cyan-400 group-hover:bg-cyan-50"
+          className="inline-flex h-8 min-w-[112px] items-center justify-center whitespace-nowrap rounded-full border border-slate-200 bg-white px-4 text-[11px] font-semibold text-cyan-800 shadow-sm transition group-hover:border-cyan-400 group-hover:bg-cyan-50"
         >
-          {service.ctaText || "Book now"}
+          {service.ctaText || "Book"}
         </Link>
       </div>
     </article>
