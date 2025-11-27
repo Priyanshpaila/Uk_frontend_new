@@ -58,7 +58,7 @@ WORKDIR /app
 
 # WORKDIR /app
 
-
+ENV PORT=8002
 ENV NEXT_PUBLIC_BASE_URL=http://backend.pharma-health.co.uk/api
 ENV NEXT_PUBLIC_ONLY_URL=backend.pharma-health.co.uk/api
 
@@ -79,7 +79,7 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next ./.next
 COPY --from=deps    /app/node_modules ./node_modules
 
-EXPOSE 8002
+EXPOSE ${PORT}
 
 # We'll inject your env vars at runtime, not baked into the image
 CMD ["npm", "run", "start"]
