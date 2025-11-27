@@ -5,16 +5,17 @@ import { Inter } from "next/font/google";
 import Navbar from "@/components/layout/Navbar";
 import Footer from "@/components/layout/Footer";
 import { AuthProvider } from "@/components/auth/AuthProvider";
+import { CartProvider } from "@/components/cart/cart-context";
 import { Toaster } from "react-hot-toast";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Pharmacy Express ",
+  title: "Pharmacy Express - Online Pharmacy ",
   description: "Pharmacy landing site",
   icons: {
-  icon: "/icon.png",
-}
+    icon: "/icon.png",
+  },
 };
 
 export default function RootLayout({
@@ -28,13 +29,12 @@ export default function RootLayout({
         className={`${inter.className} min-h-screen bg-white flex flex-col`}
       >
         <AuthProvider>
-          <Navbar />
-          {/* 👇 main grows to fill the screen */}
-          <main className="flex-1">
-            {children}
-          </main>
-          <Footer />
-          <Toaster position="top-right" />
+          <CartProvider>
+            <Navbar />
+            <main className="flex-1">{children}</main>
+            <Footer />
+            <Toaster position="top-right" />
+          </CartProvider>
         </AuthProvider>
       </body>
     </html>

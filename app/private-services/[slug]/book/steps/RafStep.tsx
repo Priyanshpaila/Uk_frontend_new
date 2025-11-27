@@ -8,19 +8,18 @@ import {
   type SetStateAction,
 } from "react";
 import { useSearchParams, useParams, useRouter } from "next/navigation";
+import {
+  fetchRafFormForService,
+  createConsultationSessionApi,
+  saveRafAnswersApi,
+  uploadRafFile,
+  type IntakeUploadResult,
+} from "@/lib/api";
+import { ArrowLeft, AlertCircle, CheckCircle2 } from "lucide-react";
 
-/**
- * RAF (Risk Assessment Form) Step
- *
- * Now uses:
- *  1) GET  `${apiBase}/api/clinic-forms`
- *     - Find the clinic form matching current service by `service_slug` or `service_id` (query param).
- *     - Prefer `form_type === "raf"` + `is_active !== false`.
- *  2) GET  `${apiBase}/api/clinic-forms/{formId}`
- *     - Load full form (schema / raf_schema) and map into dynamic Questions.
- *
- * Answer submission still uses the existing consultation endpoints as before.
- */
+/* ------------------------------------------------------------------ */
+/* Types & helpers for dynamic questions                              */
+/* ------------------------------------------------------------------ */
 
 type QuestionType =
   | "text"
@@ -55,7 +54,7 @@ type Question = {
   accept?: string;
   sectionKey?: string;
   sectionTitle?: string;
-  showIf?: VisibilityCond; // conditionally visible based on another answer
+  showIf?: VisibilityCond;
 };
 
 type Answers = Record<string, any>;
@@ -73,39 +72,13 @@ type ApiClinicForm = {
   raf_schema?: any;
 };
 
-function getAuthHeaders(): Record<string, string> {
-  const h: Record<string, string> = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-  };
-  try {
-    const t =
-      (typeof window !== "undefined"
-        ? localStorage.getItem("token") ||
-          localStorage.getItem("auth_token") ||
-          ""
-        : "") || "";
-    if (t) h.Authorization = `Bearer ${t}`;
-  } catch {}
-  return h;
-}
+const slugify = (s: string) =>
+  String(s || "")
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
 
-function getCookie(name: string): string | undefined {
-  try {
-    const value = `; ${document.cookie}`;
-    const parts = value.split(`; ${name}=`);
-    if (parts.length === 2) return parts.pop()!.split(";").shift();
-  } catch {}
-  return undefined;
-}
-
-async function ensureCsrfCookie(base: string) {
-  try {
-    await fetch(`${base}/sanctum/csrf-cookie`, { credentials: "include" });
-  } catch {}
-}
-
-// Extract conditional visibility from common shapes like showIf, visibleIf, when, condition
 function extractShowIf(input: any): VisibilityCond | undefined {
   const cand =
     input?.showIf ??
@@ -146,37 +119,10 @@ function extractShowIf(input: any): VisibilityCond | undefined {
   return out;
 }
 
-const slugify = (s: string) =>
-  String(s || "")
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
-
-function asNumber(v: any): number | undefined {
-  const n = Number(v);
-  return Number.isFinite(n) && n > 0 ? n : undefined;
-}
-
-function getFirstSearchParamNumber(
-  search: any,
-  names: string[]
-): number | undefined {
-  try {
-    for (const k of names) {
-      const v = search?.get?.(k);
-      const n = Number(v);
-      if (Number.isFinite(n) && n > 0) return n;
-    }
-  } catch {}
-  return undefined;
-}
-
-// --- Helpers to normalise different schema shapes into our Question[] ---
+// Convert various schema shapes into our `Question[]`
 function toQuestionArray(input: any): Question[] {
   if (!input) return [];
 
-  // If the backend stored JSON as a string, parse and recurse.
   if (typeof input === "string") {
     try {
       return toQuestionArray(JSON.parse(input));
@@ -185,24 +131,15 @@ function toQuestionArray(input: any): Question[] {
     }
   }
 
-  // Case A: Array of sections with `fields`
-  if (
-    Array.isArray(input) &&
-    input.every((sec) => Array.isArray((sec as any)?.fields))
-  ) {
+  // Case A: [{ section, fields: [...] }]
+  if (Array.isArray(input) && input.every((sec) => Array.isArray((sec as any)?.fields))) {
     const out: Question[] = [];
     for (const sec of input as any[]) {
       const secTitle = String(
-        (sec as any)?.label ??
-          (sec as any)?.title ??
-          (sec as any)?.name ??
-          "Section"
+        sec.label ?? sec.title ?? sec.name ?? "Section",
       );
-      const secKey = String(
-        (sec as any)?.key ??
-          (sec as any)?.data?.key ??
-          slugify(secTitle)
-      );
+      const secKey = String(sec.key ?? sec.data?.key ?? slugify(secTitle));
+
       for (const f of sec.fields || []) {
         if (!f) continue;
         const rawType = String(f.type || "").toLowerCase();
@@ -233,7 +170,7 @@ function toQuestionArray(input: any): Question[] {
                 : {
                     value: String(o.value ?? o.id ?? o),
                     label: String(o.label ?? o.name ?? o),
-                  }
+                  },
             )
           : Array.isArray(f.data?.options)
           ? f.data.options.map((o: any) =>
@@ -242,7 +179,7 @@ function toQuestionArray(input: any): Question[] {
                 : {
                     value: String(o.value ?? o.id ?? o),
                     label: String(o.label ?? o.name ?? o),
-                  }
+                  },
             )
           : undefined;
 
@@ -254,7 +191,7 @@ function toQuestionArray(input: any): Question[] {
               f.title ??
               f.name ??
               f.data?.label ??
-              "Question"
+              "Question",
           ),
           helpText: f.helpText ?? f.help ?? f.data?.help ?? undefined,
           type: mappedType,
@@ -265,7 +202,7 @@ function toQuestionArray(input: any): Question[] {
           options: opts,
           multiple: Boolean(f.multiple ?? f.data?.multiple),
           accept: String(
-            f.accept ?? f.data?.accept ?? "image/*,application/pdf"
+            f.accept ?? f.data?.accept ?? "image/*,application/pdf",
           ),
           sectionKey: secKey,
           sectionTitle: secTitle,
@@ -276,36 +213,31 @@ function toQuestionArray(input: any): Question[] {
     return out;
   }
 
-  // Case B: Generic array of question-like items
+  // Case B: simple array of questions (+ optional section entries)
   if (Array.isArray(input)) {
     const items: Question[] = [];
     let curSectionKey: string | undefined;
     let curSectionTitle: string | undefined;
+
     input.forEach((x: any, i: number) => {
       if (!x || typeof x !== "object") return;
 
-      // Capture explicit section header blocks and advance context
       const t = String(x.type ?? x.data?.type ?? "").toLowerCase();
       if (t === "section") {
         const title = String(
-          x.label ?? x.data?.label ?? x.title ?? "Section"
+          x.label ?? x.data?.label ?? x.title ?? "Section",
         );
         curSectionTitle = title;
-        curSectionKey = String(
-          x.key ?? x.data?.key ?? slugify(title)
-        );
-        return; // do not push a question for a section header
+        curSectionKey = String(x.key ?? x.data?.key ?? slugify(title));
+        return;
       }
 
-      // Allow nested section objects inside mixed arrays
       if (Array.isArray(x.fields)) {
         items.push(...toQuestionArray([x]));
         return;
       }
 
-      const rawType = String(
-        x.type ?? x.data?.type ?? ""
-      ).toLowerCase();
+      const rawType = String(x.type ?? x.data?.type ?? "").toLowerCase();
       const wantsMulti = Boolean(x.multiple ?? x.data?.multiple);
 
       const mappedType: QuestionType =
@@ -338,7 +270,7 @@ function toQuestionArray(input: any): Question[] {
               : {
                   value: String(o.value ?? o.id ?? o),
                   label: String(o.label ?? o.name ?? o),
-                }
+                },
           )
         : Array.isArray(x.data?.options)
         ? x.data.options.map((o: any) =>
@@ -347,29 +279,22 @@ function toQuestionArray(input: any): Question[] {
               : {
                   value: String(o.value ?? o.id ?? o),
                   label: String(o.label ?? o.name ?? o),
-                }
+                },
           )
         : undefined;
 
       const label =
-        x.label ??
-        x.title ??
-        x.name ??
-        x.data?.label ??
-        `Question ${i + 1}`;
-      const id = String(
-        x.id ?? x.key ?? x.data?.key ?? `q_${i}`
-      );
+        x.label ?? x.title ?? x.name ?? x.data?.label ?? `Question ${i + 1}`;
+      const id = String(x.id ?? x.key ?? x.data?.key ?? `q_${i}`);
 
-      // Section assignment for this question
       const sKey = String(
-        x.section ?? x.data?.section ?? curSectionKey ?? ""
+        x.section ?? x.data?.section ?? curSectionKey ?? "",
       );
       const sTitle = String(
         x.sectionTitle ??
           x.data?.sectionTitle ??
           curSectionTitle ??
-          (sKey ? "Section" : "")
+          (sKey ? "Section" : ""),
       );
 
       items.push({
@@ -385,20 +310,22 @@ function toQuestionArray(input: any): Question[] {
         options,
         multiple: Boolean(x.multiple ?? x.data?.multiple),
         accept: String(
-          x.accept ?? x.data?.accept ?? "image/*,application/pdf"
+          x.accept ?? x.data?.accept ?? "image/*,application/pdf",
         ),
         sectionKey: sKey || undefined,
         sectionTitle: sTitle || undefined,
         showIf: extractShowIf(x),
       });
     });
+
     return items;
   }
 
-  // Case C: Object wrapper with `.schema` or similar
+  // Case C: wrapper object { schema: [...] }
   if (typeof input === "object") {
     const maybe =
       input.schema ??
+      input.raf_schema ??
       input.questions ??
       input.fields ??
       input.form?.schema;
@@ -410,6 +337,21 @@ function toQuestionArray(input: any): Question[] {
 
 const rafStorageKey = (slug: string) => `raf_answers.${slug}`;
 const legacyRafStorageKey = (slug: string) => `raf.answers.${slug}`;
+const rafSectionKey = (slug: string) => `raf_section.${slug}`;
+
+function getCookie(name: string): string | undefined {
+  try {
+    const value = `; ${document.cookie}`;
+    const parts = value.split(`; ${name}=`);
+    if (parts.length === 2) return parts.pop()!.split(";").shift();
+  } catch {}
+  return undefined;
+}
+
+function asNumber(v: any): number | undefined {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
 
 function stashSessionId(id: number) {
   try {
@@ -419,11 +361,23 @@ function stashSessionId(id: number) {
   } catch {}
 }
 
+function getFirstSearchParamNumber(
+  search: any,
+  names: string[],
+): number | undefined {
+  try {
+    for (const k of names) {
+      const v = search?.get?.(k);
+      const n = Number(v);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  } catch {}
+  return undefined;
+}
+
 function resolveInitialSessionId(search: any): number | undefined {
   try {
-    const urlId = getFirstSearchParamNumber(search as any, [
-      "session_id",
-    ]);
+    const urlId = getFirstSearchParamNumber(search as any, ["session_id"]);
     if (urlId) {
       stashSessionId(urlId);
       return urlId;
@@ -433,7 +387,7 @@ function resolveInitialSessionId(search: any): number | undefined {
       getCookie("consultation_session_id") ||
         getCookie("pe_consultation_session_id") ||
         getCookie("pe.consultation_session_id") ||
-        getCookie("csid")
+        getCookie("csid"),
     );
     if (cookieId) return cookieId;
 
@@ -446,12 +400,23 @@ function resolveInitialSessionId(search: any): number | undefined {
           sessionStorage.getItem("pe_consultation_session_id") ||
           sessionStorage.getItem("consultationSessionId"))) ||
       "";
-    const ls = asNumber(raw);
-    return ls;
+    return asNumber(raw);
   } catch {
     return undefined;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/* Main RAF step component                                            */
+/* ------------------------------------------------------------------ */
+
+type UploadedFile = {
+  name: string;
+  size?: number;
+  type?: string;
+  path?: string;
+  url?: string;
+};
 
 export default function RafStep() {
   const router = useRouter();
@@ -459,250 +424,107 @@ export default function RafStep() {
   const search = useSearchParams();
 
   const slug = params?.slug ?? "";
-  const nextStep = search.get("next") || "calendar"; // default after RAF
-  const prevStep = search.get("prev") || "treatments"; // default back
+  const nextStep = search.get("next") || "calendar";
+  const prevStep = search.get("prev") || "treatments";
 
-  // Root API base, without /api
-  const apiBase =
-    process.env.NEXT_PUBLIC_API_BASE?.replace(/\/+$/, "") ||
-    "http://localhost:8000";
+  const serviceIdParam =
+    search?.get("serviceId") || search?.get("service_id") || undefined;
 
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   const [questions, setQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<Answers>({});
   const [saveFlash, setSaveFlash] = useState<string | null>(null);
-  // Keep real File objects here so we can upload them before posting answers
   const [fileStash, setFileStash] = useState<Record<string, File[]>>({});
 
   const [sessionId, setSessionId] = useState<number | undefined>(() =>
-    resolveInitialSessionId(search as any)
+    resolveInitialSessionId(search as any),
   );
 
+  // keep URL session_id in sync if it changes later
   useEffect(() => {
-    const urlId = getFirstSearchParamNumber(search as any, [
-      "session_id",
-    ]);
+    const urlId = getFirstSearchParamNumber(search as any, ["session_id"]);
     if (urlId && urlId !== sessionId) {
       stashSessionId(urlId);
       setSessionId(urlId);
     }
   }, [search, sessionId]);
 
+  // Ensure a consultation session exists
   useEffect(() => {
-    let aborted = false;
+    let cancelled = false;
+
     async function createIfMissing() {
       if (!slug || sessionId) return;
       try {
-        const res = await fetch(
-          `${apiBase}/api/consultations/sessions`,
-          {
-            method: "POST",
-            headers: {
-              ...getAuthHeaders(),
-              Accept: "application/json",
-              "Content-Type": "application/json",
-            },
-            credentials: "omit",
-            body: JSON.stringify({ service_slug: slug }),
-          }
-        );
-        if (!res.ok) return;
-        const data = await res.json().catch(() => null);
-        const sid = Number(data?.session_id || data?.id);
-        if (!aborted && Number.isFinite(sid) && sid > 0) {
+        const sid = await createConsultationSessionApi(slug);
+        if (!cancelled && sid) {
           stashSessionId(sid);
           setSessionId(sid);
         }
-      } catch {}
+      } catch {
+        // soft-fail, user can still answer
+      }
     }
+
     createIfMissing();
     return () => {
-      aborted = true;
+      cancelled = true;
     };
-  }, [slug, apiBase, sessionId]);
+  }, [slug, sessionId]);
 
-  useEffect(() => {
-    if (search.get("debug") !== "1") return;
-    try {
-      const fromUrl = getFirstSearchParamNumber(search as any, [
-        "session_id",
-      ]);
-      const cookies = {
-        consultation_session_id: getCookie("consultation_session_id"),
-        pe_consultation_session_id: getCookie(
-          "pe_consultation_session_id"
-        ),
-        pe_dot_consultation_session_id: getCookie(
-          "pe.consultation_session_id"
-        ),
-        csid: getCookie("csid"),
-      } as const;
-      const storage = {
-        ls_consultation_session_id:
-          typeof window !== "undefined"
-            ? localStorage.getItem("consultation_session_id")
-            : null,
-        ls_pe_consultation_session_id:
-          typeof window !== "undefined"
-            ? localStorage.getItem("pe_consultation_session_id")
-            : null,
-        ls_consultationSessionId:
-          typeof window !== "undefined"
-            ? localStorage.getItem("consultationSessionId")
-            : null,
-        ss_consultation_session_id:
-          typeof window !== "undefined"
-            ? sessionStorage.getItem("consultation_session_id")
-            : null,
-        ss_pe_consultation_session_id:
-          typeof window !== "undefined"
-            ? sessionStorage.getItem("pe_consultation_session_id")
-            : null,
-        ss_consultationSessionId:
-          typeof window !== "undefined"
-            ? sessionStorage.getItem("consultationSessionId")
-            : null,
-      } as const;
-      console.log("[raf] session snapshot", {
-        sessionId,
-        fromUrl,
-        cookies,
-        storage,
-      });
-    } catch {}
-  }, [sessionId, search]);
-
-  // Load cached answers from localStorage (with legacy fallback)
+  // Load cached answers (and last_raf fallback) on mount
   useEffect(() => {
     try {
       if (!slug) return;
+
       const cached =
         localStorage.getItem(rafStorageKey(slug)) ||
         localStorage.getItem(legacyRafStorageKey(slug)) ||
         localStorage.getItem(`assessment.answers.${slug}`);
+
       if (cached) {
         setAnswers(JSON.parse(cached));
+        return;
+      }
+
+      // Fallback: last_raf object { slug, sessionId, answers, ts }
+      const lastRaw = localStorage.getItem("last_raf");
+      if (lastRaw) {
+        try {
+          const parsed = JSON.parse(lastRaw);
+          if (parsed?.slug === slug && parsed.answers) {
+            setAnswers(parsed.answers);
+          }
+        } catch {
+          // ignore
+        }
       }
     } catch {
       // ignore
     }
   }, [slug]);
 
-  // 🔹 Fetch RAF questions via clinic-forms
+  // Fetch RAF form + questions
   useEffect(() => {
+    if (!slug) return;
+
     let done = false;
+
     async function run() {
-      if (!slug) return;
       setLoading(true);
       setError(null);
+
       try {
-        // 1) Get list of clinic forms
-        const listRes = await fetch(
-          `${apiBase}/api/clinic-forms`,
-          {
-            credentials: "omit",
-            headers: {
-              ...getAuthHeaders(),
-              Accept: "application/json",
-            },
-          }
-        );
-
-        if (!listRes.ok) {
-          const text = await listRes.text().catch(() => "");
-          throw new Error(
-            text
-              ? `Failed to load clinic forms (${listRes.status}): ${text.slice(
-                  0,
-                  180
-                )}`
-              : `Failed to load clinic forms (${listRes.status})`
-          );
-        }
-
-        let listPayload: any = null;
-        try {
-          listPayload = await listRes.json();
-        } catch {
-          listPayload = null;
-        }
-
-        const forms: ApiClinicForm[] = Array.isArray(listPayload?.data)
-          ? listPayload.data
-          : Array.isArray(listPayload)
-          ? listPayload
-          : [];
-
-        const serviceIdParam =
-          search?.get("serviceId") ||
-          search?.get("service_id") ||
-          undefined;
-
-        const candidates = forms.filter((f) => {
-          const matchesSlug =
-            f.service_slug &&
-            String(f.service_slug) === String(slug);
-          const matchesId =
-            serviceIdParam &&
-            f.service_id &&
-            String(f.service_id) === String(serviceIdParam);
-          const isRaf =
-            (f.form_type || "").toLowerCase() === "raf";
-          const isActive = f.is_active !== false;
-          return (matchesSlug || matchesId) && isRaf && isActive;
-        });
-
-        const form = candidates[0] || null;
-
-        if (!form?._id) {
-          // No matching form: not a hard error, just no questions
+        const result = await fetchRafFormForService(slug, serviceIdParam);
+        if (!result) {
           setQuestions([]);
           return;
         }
 
-        // 2) Load the concrete form by ID
-        const detailRes = await fetch(
-          `${apiBase}/api/clinic-forms/${encodeURIComponent(
-            form._id
-          )}`,
-          {
-            credentials: "omit",
-            headers: {
-              ...getAuthHeaders(),
-              Accept: "application/json",
-            },
-          }
-        );
-
-        if (!detailRes.ok) {
-          const text = await detailRes.text().catch(() => "");
-          throw new Error(
-            text
-              ? `Failed to load form (${detailRes.status}): ${text.slice(
-                  0,
-                  180
-                )}`
-              : `Failed to load form (${detailRes.status})`
-          );
-        }
-
-        let detailPayload: any = null;
-        try {
-          detailPayload = await detailRes.json();
-        } catch {
-          detailPayload = null;
-        }
-
-        // Your sample object matches this shape
-        const rawSchema =
-          detailPayload?.schema ??
-          detailPayload?.raf_schema ??
-          detailPayload?.questions ??
-          null;
-
-        const list = toQuestionArray(rawSchema);
+        const list = toQuestionArray(result.schema);
         setQuestions(list);
       } catch (e: any) {
         setError(e?.message || "Failed to load questions.");
@@ -711,13 +533,14 @@ export default function RafStep() {
         if (!done) setLoading(false);
       }
     }
+
     run();
     return () => {
       done = true;
     };
-  }, [apiBase, slug, search]);
+  }, [slug, serviceIdParam]);
 
-  // Persist answers to localStorage (with legacy and assessment keys, and event)
+  // Persist answers to localStorage + dispatch event
   useEffect(() => {
     try {
       if (!slug) return;
@@ -725,30 +548,22 @@ export default function RafStep() {
       localStorage.setItem(rafStorageKey(slug), json);
       localStorage.setItem(legacyRafStorageKey(slug), json);
       localStorage.setItem(`assessment.answers.${slug}`, json);
-      try {
-        window.dispatchEvent(
-          new CustomEvent("raf:updated", {
-            detail: {
-              slug,
-              sessionId,
-              count: Object.keys(answers || {}).length,
-            },
-          })
-        );
-        // Debug logging if ?debug=1
-        if (search.get("debug") === "1") {
-          try {
-            console.log("[raf] updated", {
-              count: Object.keys(answers || {}).length,
-              answers,
-            });
-          } catch {}
-        }
-      } catch {}
+
+      window.dispatchEvent(
+        new CustomEvent("raf:updated", {
+          detail: {
+            slug,
+            sessionId,
+            count: Object.keys(answers || {}).length,
+          },
+        }),
+      );
     } catch {
       // ignore
     }
-  }, [slug, answers, sessionId, search]);
+  }, [slug, answers, sessionId]);
+
+  // ---- visibility & progress ----------------------------------
 
   const idByKey = useMemo(() => {
     const m = new Map<string, string>();
@@ -764,12 +579,12 @@ export default function RafStep() {
     return byKey ? answers[byKey] : undefined;
   };
 
-  const normalize = (v: any) => {
+  const normalizeCondVal = (v: any) => {
     if (v === null || v === undefined) return v;
     if (typeof v === "string") return v.trim().toLowerCase();
     if (typeof v === "boolean" || typeof v === "number") return v;
     if (typeof v === "object" && "value" in v)
-      return normalize((v as any).value);
+      return normalizeCondVal((v as any).value);
     return v;
   };
 
@@ -778,11 +593,11 @@ export default function RafStep() {
     if (!c) return true;
     const val = getAnswerByField(c.field);
     if (c.truthy) return !!val;
-    if (c.in) return c.in.map(normalize).includes(normalize(val));
+    if (c.in)
+      return c.in.map(normalizeCondVal).includes(normalizeCondVal(val));
     if (c.equals !== undefined) {
-      const eq = normalize(c.equals);
-      let v = normalize(val);
-      // handle common yes strings
+      const eq = normalizeCondVal(c.equals);
+      let v = normalizeCondVal(val);
       if (eq === "yes")
         return v === true || v === "yes" || v === "y" || v === "true";
       if (eq === "no")
@@ -790,13 +605,13 @@ export default function RafStep() {
       return v === eq;
     }
     if (c.notEquals !== undefined)
-      return normalize(val) !== normalize(c.notEquals);
+      return normalizeCondVal(val) !== normalizeCondVal(c.notEquals);
     return !!val;
   };
 
   const visibleQuestions = useMemo(
     () => questions.filter((q) => isVisible(q)),
-    [questions, answers]
+    [questions, answers],
   );
 
   const SECTION_NONE = "__default__";
@@ -820,12 +635,39 @@ export default function RafStep() {
 
   const [sectionIdx, setSectionIdx] = useState(0);
 
+  // Restore section index from storage
   useEffect(() => {
-    if (sectionIdx >= sections.order.length) setSectionIdx(0);
+    if (!slug) return;
+    try {
+      const raw = localStorage.getItem(rafSectionKey(slug));
+      if (!raw) return;
+      const n = Number(raw);
+      if (Number.isFinite(n) && n >= 0) {
+        setSectionIdx(n);
+      }
+    } catch {
+      // ignore
+    }
+  }, [slug]);
+
+  // Keep section index within bounds
+  useEffect(() => {
+    if (sectionIdx >= sections.order.length) {
+      setSectionIdx(0);
+    }
   }, [sections.order.length, sectionIdx]);
 
-  const currentSectionKey =
-    sections.order[sectionIdx] ?? SECTION_NONE;
+  // Persist section index
+  useEffect(() => {
+    if (!slug) return;
+    try {
+      localStorage.setItem(rafSectionKey(slug), String(sectionIdx));
+    } catch {
+      // ignore
+    }
+  }, [slug, sectionIdx]);
+
+  const currentSectionKey = sections.order[sectionIdx] ?? SECTION_NONE;
   const currentSectionTitle =
     sections.meta.get(currentSectionKey)?.title ??
     (currentSectionKey === SECTION_NONE ? "General" : "Section");
@@ -833,23 +675,9 @@ export default function RafStep() {
   const questionsInSection = useMemo(
     () =>
       visibleQuestions.filter(
-        (q) => (q.sectionKey ?? SECTION_NONE) === currentSectionKey
+        (q) => (q.sectionKey ?? SECTION_NONE) === currentSectionKey,
       ),
-    [visibleQuestions, currentSectionKey]
-  );
-
-  const requiredUnansweredInSection = useMemo(
-    () =>
-      questionsInSection.filter(
-        (q) =>
-          q.required &&
-          (answers[q.id] === undefined ||
-            answers[q.id] === null ||
-            answers[q.id] === "" ||
-            (Array.isArray(answers[q.id]) &&
-              answers[q.id].length === 0))
-      ),
-    [questionsInSection, answers]
+    [visibleQuestions, currentSectionKey],
   );
 
   const isEmptyAnswer = (v: any) =>
@@ -861,31 +689,31 @@ export default function RafStep() {
   const requiredUnanswered = useMemo(
     () =>
       visibleQuestions.filter(
-        (q) => q.required && isEmptyAnswer(answers[q.id])
+        (q) => q.required && isEmptyAnswer(answers[q.id]),
       ),
-    [visibleQuestions, answers]
+    [visibleQuestions, answers],
+  );
+
+  const requiredUnansweredInSection = useMemo(
+    () =>
+      questionsInSection.filter(
+        (q) => q.required && isEmptyAnswer(answers[q.id]),
+      ),
+    [questionsInSection, answers],
   );
 
   const totalRequired = useMemo(
     () => visibleQuestions.filter((q) => q.required).length,
-    [visibleQuestions]
+    [visibleQuestions],
   );
-  const remainingRequired = useMemo(
-    () => requiredUnanswered.length,
-    [requiredUnanswered]
-  );
-  const answeredRequired = useMemo(
-    () => Math.max(totalRequired - remainingRequired, 0),
-    [totalRequired, remainingRequired]
-  );
-  const percentComplete = useMemo(
-    () =>
-      totalRequired
-        ? Math.round((answeredRequired / totalRequired) * 100)
-        : 100,
-    [answeredRequired, totalRequired]
-  );
+  const remainingRequired = requiredUnanswered.length;
+  const answeredRequired = Math.max(totalRequired - remainingRequired, 0);
+  const percentComplete = totalRequired
+    ? Math.round((answeredRequired / totalRequired) * 100)
+    : 100;
   const showProgressBar = !error && totalRequired > 0;
+
+  // ---- local actions ------------------------------------------
 
   const onChange = (id: string, value: any) => {
     setAnswers((prev) => ({ ...prev, [id]: value }));
@@ -904,101 +732,20 @@ export default function RafStep() {
   const onBack = () => {
     router.push(
       `/private-services/${encodeURIComponent(
-        slug
-      )}/book?step=${encodeURIComponent(prevStep)}`
+        slug,
+      )}/book?step=${encodeURIComponent(prevStep)}`,
     );
   };
 
-  type UploadedFile = {
-    name: string;
-    size?: number;
-    type?: string;
-    path?: string;
-    url?: string;
-  };
-
-  // Bearer token resolver (no cookies)
-  function getBearerToken(): string {
-    try {
-      const envTok = (process.env.NEXT_PUBLIC_API_TOKEN || "").trim();
-      if (envTok) return envTok;
-      if (typeof window !== "undefined") {
-        const userTok =
-          localStorage.getItem("token") ||
-          localStorage.getItem("auth_token") ||
-          "";
-        if (userTok) return userTok;
-      }
-    } catch {}
-    return "";
-  }
-
-  // Stateless intake image uploader
-  async function uploadIntakeImage(
-    apiBase: string,
-    file: File,
-    kind: string = "raf"
-  ): Promise<{
-    ok: boolean;
-    url?: string;
-    path?: string;
-    message?: string;
-  }> {
-    try {
-      const token = getBearerToken();
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("kind", kind);
-
-      const res = await fetch(
-        `${apiBase}/api/uploads/intake-image`,
-        {
-          method: "POST",
-          headers: token ? { Authorization: `Bearer ${token}` } : {},
-          body: fd, // browser sets multipart boundary
-          credentials: "omit", // IMPORTANT: never send cookies
-        }
-      );
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data?.ok !== true) {
-        return {
-          ok: false,
-          message:
-            data?.message ||
-            `Upload failed (${res.status})`,
-        };
-      }
-      return { ok: true, url: data.url, path: data.path };
-    } catch (e: any) {
-      return {
-        ok: false,
-        message: e?.message || "Network error",
-      };
-    }
-  }
-
-  function normalizeUploadResponse(json: any): UploadedFile[] {
-    if (!json) return [];
-    // Common shapes:
-    // { files: [...] }, { data: [...] }, [...], { name, path, url }
-    if (Array.isArray(json)) return json as UploadedFile[];
-    if (Array.isArray(json?.files)) return json.files as UploadedFile[];
-    if (Array.isArray(json?.data)) return json.data as UploadedFile[];
-    if (json?.file) return [json.file as UploadedFile];
-    if (json?.path || json?.url || json?.name)
-      return [json as UploadedFile];
-    return [];
-  }
-
   async function uploadFilesForQuestion(
     qid: string,
-    files: File[]
+    files: File[],
   ): Promise<UploadedFile[]> {
     const out: UploadedFile[] = [];
-
     for (const f of files) {
-      const res = await uploadIntakeImage(apiBase, f, "raf");
+      const res: IntakeUploadResult = await uploadRafFile(f, "raf").catch(
+        () => ({ ok: false }),
+      );
       if (res.ok) {
         out.push({
           name: f.name || "",
@@ -1007,120 +754,32 @@ export default function RafStep() {
           path: res.path,
           url: res.url,
         });
-      } else {
-        if (search.get("debug") === "1") {
-          try {
-            console.warn("[raf] upload failed", {
-              qid,
-              file: f.name,
-              message: res.message,
-            });
-          } catch {}
-        }
       }
     }
-
     return out;
   }
 
-  async function uploadPendingFiles(): Promise<
-    Record<string, UploadedFile[]>
-  > {
+  async function uploadPendingFiles(): Promise<Record<string, UploadedFile[]>> {
     const out: Record<string, UploadedFile[]> = {};
     const entries = Object.entries(fileStash || {});
     for (const [qid, files] of entries) {
       if (!files || files.length === 0) continue;
-      const uploaded = await uploadFilesForQuestion(
-        qid,
-        files
-      ).catch(() => []);
+      const uploaded = await uploadFilesForQuestion(qid, files).catch(
+        () => [],
+      );
       if (uploaded.length) out[qid] = uploaded;
     }
     return out;
   }
 
-  async function postAnswersToConsultation(
-    override?: Answers
-  ) {
-    const sid =
-      sessionId != null ? Number(sessionId) : NaN;
-    const effectiveAnswers = override ?? answers;
-    if (!Number.isFinite(sid) || sid <= 0) {
-      console.warn("[raf] missing sessionId — skipping POST");
-      return { ok: false, skipped: true };
-    }
-    try {
-      await ensureCsrfCookie(apiBase);
-      const headers: Record<string, string> = {
-        ...getAuthHeaders(),
-      };
-      const xsrf = getCookie("XSRF-TOKEN");
-      if (xsrf) {
-        try {
-          headers["X-XSRF-TOKEN"] = decodeURIComponent(xsrf);
-        } catch {
-          headers["X-XSRF-TOKEN"] = xsrf;
-        }
-      }
-
-      const payload = {
-        form_type: "raf",
-        service_slug: slug,
-        answers: effectiveAnswers,
-        session_id: sid,
-      };
-
-      if (search.get("debug") === "1") {
-        try {
-          console.log("[raf] posting consultation answers", {
-            sid,
-            payload,
-            api: `${apiBase}/api/consultations/${encodeURIComponent(
-              String(sid)
-            )}/answers`,
-          });
-        } catch {}
-      }
-
-      const res = await fetch(
-        `${apiBase}/api/consultations/${encodeURIComponent(
-          String(sid)
-        )}/answers`,
-        {
-          method: "POST",
-          headers,
-          credentials: "include",
-          body: JSON.stringify(payload),
-        }
-      );
-
-      const text = await res.text().catch(() => "");
-      if (!res.ok) {
-        let json: any = null;
-        try {
-          json = text ? JSON.parse(text) : null;
-        } catch {}
-        console.warn(
-          "[raf] consult answers failed",
-          res.status,
-          json || text || "(empty)"
-        );
-      } else if (search.get("debug") === "1") {
-        console.log("[raf] consult answers ok", res.status);
-      }
-      return { ok: res.ok };
-    } catch (e) {
-      console.warn("[raf] error posting answers", e);
-      return { ok: false };
-    }
-  }
-
   const onContinue = async () => {
     setSubmitting(true);
     setError(null);
-    setSaveFlash("Saving");
-    // First, upload any pending files and merge server-returned urls/paths into answers
+    setSaveFlash("Saving…");
+
     let answersToSend: Answers = { ...answers };
+
+    // Attach uploaded file metadata
     const uploadedByQ = await uploadPendingFiles().catch(() => ({}));
     for (const [qid, items] of Object.entries(uploadedByQ)) {
       answersToSend[qid] = items.map((it) => ({
@@ -1131,137 +790,41 @@ export default function RafStep() {
         url: it.url,
       }));
     }
+
     try {
+      const sid =
+        sessionId != null ? Number(sessionId) : undefined;
+      if (sid && Number.isFinite(sid) && sid > 0) {
+        // persist answers in backend
+        await saveRafAnswersApi(sid, slug, answersToSend);
+      }
+
+      // also persist a "last_raf" snapshot for extra safety
       try {
         localStorage.setItem(
           "last_raf",
           JSON.stringify({
             slug,
-            sessionId,
-            answers,
+            sessionId: sid,
+            answers: answersToSend,
             ts: Date.now(),
-          })
+          }),
         );
-      } catch {}
-
-      try {
-        sessionStorage.setItem(
-          "raf.last_submit",
-          JSON.stringify({
-            slug,
-            sessionId,
-            answers,
-            ts: Date.now(),
-          })
-        );
-      } catch {}
-
-      try {
-        window.dispatchEvent(
-          new CustomEvent("raf:submit", {
-            detail: { slug, sessionId, answers },
-          })
-        );
-        if (search.get("debug") === "1") {
-          console.log("[raf] submit", { slug, sessionId, answers });
-        }
-      } catch {}
-
-      // primary save
-      await postAnswersToConsultation(answersToSend);
-
-      // legacy best effort
-      try {
-        await ensureCsrfCookie(apiBase);
-        const xsrf = getCookie("XSRF-TOKEN");
-        const postUrls = [
-          `${apiBase}/api/services/${encodeURIComponent(
-            slug
-          )}/raf/answers`,
-          `${apiBase}/api/services/${encodeURIComponent(
-            slug
-          )}/forms/answers`,
-        ];
-        for (const url of postUrls) {
-          try {
-            const legacyHeaders: Record<string, string> = {
-              Accept: "application/json",
-              "Content-Type": "application/json",
-              "X-Requested-With": "XMLHttpRequest",
-              ...getAuthHeaders(),
-            };
-            if (xsrf) {
-              try {
-                legacyHeaders["X-XSRF-TOKEN"] =
-                  decodeURIComponent(xsrf);
-              } catch {
-                legacyHeaders["X-XSRF-TOKEN"] = xsrf;
-              }
-            }
-
-            const r = await fetch(url, {
-              method: "POST",
-              headers: legacyHeaders,
-              credentials: "include",
-              body: JSON.stringify({
-                answers: answersToSend,
-                session_id: sessionId,
-                service: slug,
-                slug,
-              }),
-            });
-
-            if (!r.ok && r.status === 419) {
-              if (
-                typeof window !== "undefined" &&
-                (window as any).__raf_legacy_retry__ !== url
-              ) {
-                (window as any).__raf_legacy_retry__ = url;
-                await ensureCsrfCookie(apiBase);
-                const retryXsrf = getCookie("XSRF-TOKEN");
-                if (retryXsrf) {
-                  try {
-                    legacyHeaders["X-XSRF-TOKEN"] =
-                      decodeURIComponent(retryXsrf);
-                  } catch {
-                    legacyHeaders["X-XSRF-TOKEN"] = retryXsrf;
-                  }
-                }
-                await fetch(url, {
-                  method: "POST",
-                  headers: legacyHeaders,
-                  credentials: "include",
-                  body: JSON.stringify({
-                    answers: answersToSend,
-                    session_id: sessionId,
-                    service: slug,
-                    slug,
-                  }),
-                }).catch(() => {});
-              }
-            }
-            if (r.ok) break;
-          } catch {}
-        }
       } catch {}
 
       setSaveFlash("Saved");
       setTimeout(() => setSaveFlash(null), 1500);
 
-      // navigate with sessionId so calendar and payment can read it
       const qp = new URLSearchParams();
       qp.set("step", nextStep);
-      if (sessionId) {
-        qp.set("session_id", String(sessionId));
+      if (sid && Number.isFinite(sid) && sid > 0) {
+        qp.set("session_id", String(sid));
         try {
-          document.cookie = `pe_consultation_session_id=${sessionId}; path=/; max-age=604800`;
+          document.cookie = `pe_consultation_session_id=${sid}; path=/; max-age=604800`;
         } catch {}
       }
-      if (search.get("debug") === "1") qp.set("debug", "1");
       router.push(
-        `/private-services/${encodeURIComponent(
-          slug
-        )}/book?${qp.toString()}`
+        `/private-services/${encodeURIComponent(slug)}/book?${qp.toString()}`,
       );
     } catch (e: any) {
       setError(e?.message || "Failed to save answers.");
@@ -1270,215 +833,215 @@ export default function RafStep() {
     }
   };
 
+  /* ---------------------------------------------------------------- */
+  /* UI                                                               */
+  /* ---------------------------------------------------------------- */
+
   return (
     <>
       {showProgressBar && (
-        <div className="sticky top-0 z-40 bg-white/80 dark:bg-slate-900/80 backdrop-blur border-b border-gray-200 dark:border-slate-700">
-          <div className="max-w-4xl mx-auto px-4 py-2 flex items-center gap-4">
+        <div className="sticky top-0 z-30 border-b border-slate-200 bg-white/80 backdrop-blur">
+          <div className="mx-auto flex max-w-5xl items-center gap-4 px-4 py-2">
             <div className="flex-1">
-              <div className="flex items-center justify-between text-sm">
-                <span className="font-medium text-gray-700 dark:text-slate-100">
-                  Progress
+              <div className="flex items-center justify-between text-xs sm:text-sm">
+                <span className="font-medium text-slate-800">
+                  Medical questions progress
                 </span>
-                <span className="rounded-full px-2 py-0.5 text-xs bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-slate-200">
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
                   {remainingRequired} left
                 </span>
               </div>
               <div
-                className="mt-2 h-2 rounded-full bg-gray-200 dark:bg-slate-800"
+                className="mt-2 h-2 rounded-full bg-slate-100"
                 role="progressbar"
-                aria-label="Risk assessment progress"
                 aria-valuenow={percentComplete}
                 aria-valuemin={0}
                 aria-valuemax={100}
               >
                 <div
-                  className="h-2 rounded-full bg-emerald-600"
+                  className="h-2 rounded-full bg-emerald-500"
                   style={{ width: `${percentComplete}%` }}
                 />
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={clearAnswers}
-                className="text-sm px-3 py-1 rounded-full border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-              >
-                Clear answers
-              </button>
-              {search.get("debug") === "1" && (
-                <span className="text-xs rounded-full px-2 py-0.5 bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-slate-200">
-                  session {sessionId ?? "none"}
-                </span>
-              )}
-            </div>
+            <button
+              type="button"
+              onClick={clearAnswers}
+              className="hidden rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 sm:inline-flex"
+            >
+              Clear answers
+            </button>
           </div>
           {saveFlash && (
-            <div className="text-center text-xs text-gray-600 dark:text-slate-300 pb-2">
+            <div className="pb-2 text-center text-[11px] text-slate-600">
               {saveFlash}
             </div>
           )}
         </div>
       )}
-      <div className="max-w-4xl mx-auto mt-4">
-        <h2 className="text-2xl md:text-3xl font-semibold mb-2">
-          Risk Assessment
-        </h2>
-        {search.get("debug") === "1" && (
-          <div className="mb-2 text-xs text-gray-600 dark:text-slate-300">
-            session {sessionId ?? "none"}
-          </div>
-        )}
-        <p className="text-gray-600 mb-6">
-          Please answer a few questions to help our clinicians assess your
-          suitability for this treatment.
-        </p>
 
-        {loading && (
-          <div className="rounded-xl border p-6 bg-white shadow-sm">
-            <div className="animate-pulse space-y-3">
-              <div className="h-4 bg-gray-200 rounded w-2/3" />
-              <div className="h-4 bg-gray-200 rounded w-1/2" />
-              <div className="h-4 bg-gray-200 rounded w-5/6" />
-              <div className="h-4 bg-gray-200 rounded w-1/3" />
+      <main className="mx-auto max-w-5xl px-4 pb-10 pt-6">
+        {/* Top bar: back + title */}
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={onBack}
+            className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to treatments
+          </button>
+
+          {sections.order.length > 1 && (
+            <div className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+              Section {sectionIdx + 1} of {sections.order.length} •{" "}
+              {currentSectionTitle}
             </div>
-          </div>
-        )}
+          )}
+        </div>
 
-        {error && !loading && (
-          <div className="rounded-xl border border-red-200 bg-red-50 text-red-700 p-4 mb-4">
-            {error}
-          </div>
-        )}
+        {/* Main card */}
+        <section className="rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-soft-card sm:p-6 md:p-8">
+          <header className="mb-6 space-y-2">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-600">
+              Medical questions
+            </p>
+            <h1 className="text-2xl font-semibold text-slate-900 md:text-3xl">
+              Risk assessment
+            </h1>
+            <p className="text-sm text-slate-600">
+              Please answer these questions so our clinicians can safely
+              assess your suitability for this treatment.
+            </p>
+          </header>
 
-        {!loading && !error && questions.length === 0 && (
-          <div className="rounded-xl border p-6 bg-white shadow-sm text-gray-600">
-            No questions for this service yet. You can still continue to the
-            next step.
-          </div>
-        )}
-
-        {!loading && questionsInSection.length > 0 && (
-          <>
-            {/* Section navigator */}
-            <div className="mb-4 flex items-center justify-between text-sm">
-              <div className="text-gray-700 dark:text-slate-200">
-                Section {sectionIdx + 1} of {sections.order.length} •{" "}
-                {currentSectionTitle}
+          {loading && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-6">
+              <div className="space-y-3 animate-pulse">
+                <div className="h-4 w-2/3 rounded bg-slate-200" />
+                <div className="h-4 w-1/2 rounded bg-slate-200" />
+                <div className="h-4 w-5/6 rounded bg-slate-200" />
+                <div className="h-4 w-1/3 rounded bg-slate-200" />
               </div>
+            </div>
+          )}
+
+          {error && !loading && (
+            <div className="mb-4 flex items-start gap-3 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
+              <AlertCircle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+              <div>{error}</div>
+            </div>
+          )}
+
+          {!loading && !error && questions.length === 0 && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-6 text-sm text-slate-600">
+              There are no medical questions configured for this service
+              yet. You can continue to the next step.
+            </div>
+          )}
+
+          {!loading && questionsInSection.length > 0 && (
+            <>
+              {/* Section navigation (inside card, TOP ONLY) */}
               {sections.order.length > 1 && (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSectionIdx((i) => Math.max(0, i - 1))
-                    }
-                    disabled={sectionIdx === 0}
-                    className="px-3 py-1 rounded-full border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-                  >
-                    Previous section
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSectionIdx((i) =>
-                        Math.min(sections.order.length - 1, i + 1)
-                      )
-                    }
-                    disabled={sectionIdx >= sections.order.length - 1}
-                    className="px-3 py-1 rounded-full border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-40"
-                  >
-                    Next section
-                  </button>
+                <div className="mb-4 flex items-center justify-between text-xs sm:text-sm">
+                  <div className="flex items-center gap-2 text-slate-700">
+                    <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-[11px] font-semibold text-emerald-700">
+                      {sectionIdx + 1}
+                    </span>
+                    <span>{currentSectionTitle}</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSectionIdx((i) => Math.max(0, i - 1))
+                      }
+                      disabled={sectionIdx === 0}
+                      className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                    >
+                      Previous section
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSectionIdx((i) =>
+                          Math.min(sections.order.length - 1, i + 1),
+                        )
+                      }
+                      disabled={sectionIdx >= sections.order.length - 1}
+                      className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                    >
+                      Next section
+                    </button>
+                  </div>
                 </div>
+              )}
+
+              <div className="space-y-5">
+                {questionsInSection.map((q) => (
+                  <QuestionField
+                    key={q.id}
+                    q={q}
+                    value={answers[q.id]}
+                    onChange={(v) => onChange(q.id, v)}
+                    fileStash={fileStash}
+                    setFileStash={setFileStash}
+                  />
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* Footer inside card (ONLY Back + Continue, no section nav) */}
+          <footer className="mt-8 flex flex-col gap-4 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-2 text-xs text-slate-600">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              <span>
+                {answeredRequired} of {totalRequired || 0} required questions
+                completed
+              </span>
+              {requiredUnansweredInSection.length > 0 && (
+                <span className="text-[11px] text-amber-600">
+                  • {requiredUnansweredInSection.length} required in this section
+                  remaining
+                </span>
               )}
             </div>
 
-            <div className="space-y-6">
-              {questionsInSection.map((q) => (
-                <QuestionField
-                  key={q.id}
-                  q={q}
-                  value={answers[q.id]}
-                  onChange={(v) => onChange(q.id, v)}
-                  fileStash={fileStash}
-                  setFileStash={setFileStash}
-                />
-              ))}
+            <div className="flex flex-1 flex-col items-stretch gap-3 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={onBack}
+                className="rounded-full border border-slate-200 px-5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Back
+              </button>
+
+              <button
+                type="button"
+                onClick={onContinue}
+                disabled={submitting || requiredUnanswered.length > 0}
+                className={`rounded-full px-6 py-2 text-sm font-semibold text-white shadow-sm transition ${
+                  submitting || requiredUnanswered.length > 0
+                    ? "bg-emerald-300 cursor-not-allowed"
+                    : "bg-emerald-600 hover:bg-emerald-700"
+                }`}
+              >
+                {submitting ? "Saving…" : "Continue"}
+              </button>
             </div>
-          </>
-        )}
-
-        {/* Footer actions */}
-        <div className="mt-8 flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={() =>
-              sectionIdx > 0
-                ? setSectionIdx((i) => Math.max(0, i - 1))
-                : onBack()
-            }
-            className="px-5 py-2 rounded-full border border-gray-300 text-gray-700 bg-white hover:bg-gray-50"
-          >
-            {sectionIdx === 0 ? "Back" : "Previous Section"}
-          </button>
-
-          <div className="text-sm text-gray-500">
-            {requiredUnansweredInSection.length > 0 && (
-              <div>
-                {requiredUnansweredInSection.length} required{" "}
-                {requiredUnansweredInSection.length === 1
-                  ? "question"
-                  : "questions"}{" "}
-                left in this section
-              </div>
-            )}
-            {requiredUnanswered.length > 0 && (
-              <div>
-                {requiredUnanswered.length} required{" "}
-                {requiredUnanswered.length === 1
-                  ? "question"
-                  : "questions"}{" "}
-                left in total
-              </div>
-            )}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => {
-              if (sectionIdx < sections.order.length - 1) {
-                setSectionIdx((i) =>
-                  Math.min(sections.order.length - 1, i + 1)
-                );
-              } else {
-                onContinue();
-              }
-            }}
-            disabled={
-              submitting ||
-              (sectionIdx >= sections.order.length - 1 &&
-                requiredUnanswered.length > 0)
-            }
-            className={`px-6 py-2 rounded-full text-white ${
-              submitting ||
-              (sectionIdx >= sections.order.length - 1 &&
-                requiredUnanswered.length > 0)
-                ? "bg-emerald-300"
-                : "bg-emerald-600 hover:bg-emerald-700"
-            }`}
-          >
-            {submitting
-              ? "Saving…"
-              : sectionIdx < sections.order.length - 1
-              ? "Next Section"
-              : "Continue"}
-          </button>
-        </div>
-      </div>
+          </footer>
+        </section>
+      </main>
     </>
   );
 }
+
+/* ------------------------------------------------------------------ */
+/* Question field renderer (styled for your theme)                     */
+/* ------------------------------------------------------------------ */
 
 function QuestionField({
   q,
@@ -1491,27 +1054,22 @@ function QuestionField({
   value: any;
   onChange: (v: any) => void;
   fileStash: Record<string, File[]>;
-  setFileStash: Dispatch<
-    SetStateAction<Record<string, File[]>>
-  >;
+  setFileStash: Dispatch<SetStateAction<Record<string, File[]>>>;
 }) {
   const base =
-    "block w-full rounded-xl border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500";
+    "block w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white";
+
   return (
     <div
       id={`q-${q.id}`}
-      className="rounded-xl border p-4 bg-white shadow-sm"
+      className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4"
     >
-      <label className="block font-medium mb-1">
+      <label className="mb-1 block text-sm font-medium text-slate-900">
         {q.label}{" "}
-        {q.required && (
-          <span className="text-red-600">*</span>
-        )}
+        {q.required && <span className="text-rose-600">*</span>}
       </label>
       {q.helpText && (
-        <p className="text-sm text-gray-500 mb-2">
-          {q.helpText}
-        </p>
+        <p className="mb-2 text-xs text-slate-600">{q.helpText}</p>
       )}
 
       {q.type === "text" && (
@@ -1543,35 +1101,35 @@ function QuestionField({
           max={q.max}
           value={value ?? ""}
           onChange={(e) =>
-            onChange(
-              e.target.value === ""
-                ? ""
-                : Number(e.target.value)
-            )
+            onChange(e.target.value === "" ? "" : Number(e.target.value))
           }
         />
       )}
 
       {q.type === "boolean" && (
-        <div className="flex items-center gap-3">
-          <label className="inline-flex items-center gap-2">
-            <input
-              type="radio"
-              name={`bool-${q.id}`}
-              checked={value === true}
-              onChange={() => onChange(true)}
-            />
-            <span>Yes</span>
-          </label>
-          <label className="inline-flex items-center gap-2">
-            <input
-              type="radio"
-              name={`bool-${q.id}`}
-              checked={value === false}
-              onChange={() => onChange(false)}
-            />
-            <span>No</span>
-          </label>
+        <div className="inline-flex gap-2 rounded-full bg-slate-100 p-1 text-xs">
+          <button
+            type="button"
+            onClick={() => onChange(true)}
+            className={`rounded-full px-3 py-1 font-medium ${
+              value === true
+                ? "bg-emerald-600 text-white"
+                : "text-slate-700"
+            }`}
+          >
+            Yes
+          </button>
+          <button
+            type="button"
+            onClick={() => onChange(false)}
+            className={`rounded-full px-3 py-1 font-medium ${
+              value === false
+                ? "bg-emerald-600 text-white"
+                : "text-slate-700"
+            }`}
+          >
+            No
+          </button>
         </div>
       )}
 
@@ -1593,19 +1151,22 @@ function QuestionField({
       )}
 
       {q.type === "multiselect" && (
-        <div className="grid sm:grid-cols-2 gap-2">
+        <div className="grid gap-2 sm:grid-cols-2">
           {(q.options || []).map((opt) => {
-            const arr: string[] = Array.isArray(value)
-              ? value
-              : [];
+            const arr: string[] = Array.isArray(value) ? value : [];
             const checked = arr.includes(opt.value);
             return (
               <label
                 key={opt.value}
-                className="flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2"
+                className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
+                  checked
+                    ? "border-emerald-400 bg-emerald-50"
+                    : "border-slate-200 bg-white"
+                }`}
               >
                 <input
                   type="checkbox"
+                  className="h-4 w-4 rounded border-slate-300 text-emerald-600"
                   checked={checked}
                   onChange={(e) => {
                     const next = new Set(arr);
@@ -1637,19 +1198,15 @@ function QuestionField({
             id={`input-${q.id}`}
             accept={q.accept ?? "image/*,application/pdf"}
             multiple={!!q.multiple}
-            className="mt-2 block w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border file:border-gray-300 file:bg-white file:text-gray-700 hover:file:bg-gray-50"
+            className="mt-1 block w-full text-xs file:mr-3 file:rounded-xl file:border file:border-slate-200 file:bg-white file:px-3 file:py-2 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-50"
             onChange={(e) => {
               const list = Array.from(e.target.files || []);
               const max = 10 * 1024 * 1024; // 10MB
-              const kept = list.filter(
-                (f) => f.size <= max
-              );
-              // Stash real files for upload at submit time
+              const kept = list.filter((f) => f.size <= max);
               setFileStash((prev) => ({
                 ...prev,
                 [q.id]: kept,
               }));
-              // Store lightweight meta to keep UI responsive and localStorage serialisable
               const meta = kept.map((f) => ({
                 name: f.name,
                 size: f.size,
@@ -1659,27 +1216,25 @@ function QuestionField({
             }}
           />
           {Array.isArray(value) && value.length > 0 && (
-            <ul className="text-sm text-gray-600">
+            <ul className="text-xs text-slate-600">
               {value.map((f: any, i: number) => (
                 <li key={i}>
                   {f.name}{" "}
                   {typeof f.size === "number"
-                    ? `(${Math.round(
-                        f.size / 1024
-                      )} KB)`
+                    ? `(${Math.round(f.size / 1024)} KB)`
                     : ""}
                 </li>
               ))}
             </ul>
           )}
           {fileStash[q.id]?.length ? (
-            <div className="text-xs text-gray-500">
-              files queued and will upload on continue
+            <div className="text-[11px] text-slate-500">
+              Files queued – they&apos;ll upload when you continue.
             </div>
           ) : null}
           {!q.helpText && (
-            <p className="text-xs text-gray-500">
-              Max 10MB. PDF or image.
+            <p className="text-[11px] text-slate-500">
+              Max 10MB. PDF or image files.
             </p>
           )}
         </div>

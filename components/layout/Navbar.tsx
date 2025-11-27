@@ -5,7 +5,6 @@ import Image from "next/image";
 import { useRouter } from "next/navigation";
 import Container from "@/components/ui/Container";
 import {
-  ShoppingCart,
   Search,
   ChevronDown,
   Menu,
@@ -13,6 +12,7 @@ import {
   User,
 } from "lucide-react";
 import { useAuth } from "@/components/auth/AuthProvider";
+import CartButton from "@/components/cart/CartButton"; // 👈 NEW
 
 const navLinks = [
   { label: "NHS Services", href: "#nhs" },
@@ -29,7 +29,6 @@ export default function Navbar() {
   const { user, clearAuth } = useAuth();
   const [open, setOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
-  const cartCount = 0;
 
   const handleLogout = () => {
     clearAuth();
@@ -37,12 +36,12 @@ export default function Navbar() {
     router.push("/");
   };
 
-  const userInitial =
-    (user?.firstName?.[0] ||
-      user?.lastName?.[0] ||
-      user?.email?.[0] ||
-      "U"
-    ).toUpperCase();
+  const userInitial = (
+    user?.firstName?.[0] ||
+    user?.lastName?.[0] ||
+    user?.email?.[0] ||
+    "U"
+  ).toUpperCase();
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/80 backdrop-blur-xl">
@@ -91,18 +90,8 @@ export default function Navbar() {
               ))}
             </nav>
 
-            {/* Cart button */}
-            <button
-              type="button"
-              className="relative flex h-9 w-9 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-700 shadow-sm hover:border-cyan-400 hover:text-cyan-700"
-            >
-              <ShoppingCart className="h-4 w-4" />
-              {cartCount > 0 && (
-                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 text-[10px] font-bold text-white">
-                  {cartCount}
-                </span>
-              )}
-            </button>
+            {/* Cart button with bottom sheet / right drawer */}
+            <CartButton />
 
             {/* Desktop account: login OR avatar */}
             {!user ? (

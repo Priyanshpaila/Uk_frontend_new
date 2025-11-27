@@ -2,10 +2,12 @@
 import type { Service } from "./types";
 import { notFound } from "next/navigation";
 
-/* ------------------- Env + helpers (same pattern as src/api.ts) ------------------- */
+/* ------------------------------------------------------------------ */
+/*                     ENV + BASE URL HELPERS                         */
+/* ------------------------------------------------------------------ */
 
 const ENV_BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || ""; // e.g. http://localhost:8000/api
-const ENV_BASE_ONLY_URL = process.env.NEXT_PUBLIC_ONLY_URL || ""; // e.g. localhost:8000/api
+const ENV_BASE_ONLY_URL = process.env.NEXT_PUBLIC_ONLY_URL || ""; // e.g. backend.domain.com/api
 
 // Helper function to check if the host is an IP
 const isIp = (host: string) => /^\d+\.\d+\.\d+\.\d+$/.test(host);
@@ -15,11 +17,12 @@ const stripProtocol = (url: string) => url.replace(/^https?:\/\//, "");
 
 /**
  * Returns the backend base URL for the *current tenant*.
- * Mirrors the behaviour of src/api.ts in your main project.
+ * For localhost/IP → use ENV_BASE_URL / ENV_BASE_ONLY_URL.
+ * For tenant.domain.tld → computes tenant-based URL using ONLY_URL.
  */
 export function getBackendBase(): string {
   if (typeof window === "undefined") {
-    // SSR safety fallback
+    // SSR fallback – no subdomain awareness here
     return ENV_BASE_URL || "http://localhost:8000/api";
   }
 
@@ -37,15 +40,14 @@ export function getBackendBase(): string {
   const hasSubdomain = parts.length >= 2;
 
   if (!hasSubdomain) {
-    // No tenant subdomain -> use base URL directly
     return resolveBaseForNoSubdomain(protocol);
   }
 
   // Subdomain case: tenant.domain.tld -> "tenant"
   const subdomain = parts[0].toLowerCase();
 
-  // Get the base URL from the environment variable (NEXT_PUBLIC_ONLY_URL) or fallback
-  const baseOnly = stripProtocol(ENV_BASE_ONLY_URL || "localhost:8000/api"); // safe fallback
+  // Get the base URL from env (WITHOUT protocol) or fallback
+  const baseOnly = stripProtocol(ENV_BASE_ONLY_URL || "localhost:8000/api");
 
   // Example: http://tenant.backend.pharma-health.co.uk/api
   return `${protocol}//${subdomain}.${baseOnly}`;
@@ -53,7 +55,6 @@ export function getBackendBase(): string {
 
 /**
  * Handle base URL when there is *no* tenant subdomain.
- * This is essentially the same as in src/api.ts.
  */
 function resolveBaseForNoSubdomain(protocol: string): string {
   if (ENV_BASE_URL) {
@@ -62,7 +63,6 @@ function resolveBaseForNoSubdomain(protocol: string): string {
   }
 
   if (ENV_BASE_ONLY_URL) {
-    // If someone misconfigured and only gave ONLY_URL, still try to use it
     return `${protocol}//${stripProtocol(ENV_BASE_ONLY_URL)}`;
   }
 
@@ -72,18 +72,36 @@ function resolveBaseForNoSubdomain(protocol: string): string {
 
 /**
  * Base URL for "master" backend (no tenant subdomain).
- * Same idea as getMasterBase() in src/api.ts.
  */
 export function getMasterBase(): string {
   return ENV_BASE_URL || "http://localhost:8000/api";
 }
 
-/* ------------------- Generic helper ------------------- */
+/**
+ * Constant base used where tenant-awareness is not needed (or on server).
+ * For page slugs etc.
+ */
+export const API_BASE = getBackendBase();
 
+/* ------------------------------------------------------------------ */
+/*                         AUTH HEADER + FETCH                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Reads whatever token you use in localStorage and returns Authorization header.
+ * Supports multiple key names so old/new flows all work.
+ */
 function getAuthHeader(): Record<string, string> {
   if (typeof window === "undefined") return {};
+
   try {
-    const token = window.localStorage?.getItem("session_token");
+    const ls = window.localStorage;
+    const token =
+      ls.getItem("session_token") ||
+      ls.getItem("pharmacy_token") ||
+      ls.getItem("pe_token") ||
+      ls.getItem("token");
+
     if (!token) return {};
     return { Authorization: `Bearer ${token}` };
   } catch {
@@ -91,6 +109,11 @@ function getAuthHeader(): Record<string, string> {
   }
 }
 
+/**
+ * Generic JSON fetch:
+ * - Always sets "Content-Type: application/json"
+ * - Automatically adds Bearer token from localStorage (if present)
+ */
 async function jsonFetch<T>(
   url: string,
   options: RequestInit = {}
@@ -114,7 +137,20 @@ async function jsonFetch<T>(
   return res.json();
 }
 
-/* ------------------- Patient Register API ------------------- */
+/**
+ * Same as jsonFetch, but takes only a path and prepends getBackendBase().
+ */
+async function apiFetch<T>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const baseUrl = getBackendBase();
+  return jsonFetch<T>(`${baseUrl}${path}`, options);
+}
+
+/* ------------------------------------------------------------------ */
+/*                        PATIENT REGISTER / LOGIN                    */
+/* ------------------------------------------------------------------ */
 
 export type RegisterPatientPayload = {
   email: string;
@@ -163,13 +199,11 @@ export type LoginPayload = {
 
 export type LoginResponse = {
   session_token: string;
-  user: any; // you can replace `any` with your actual user type later
+  user: any; // replace with your actual user type later
 };
 
 /**
  * POST /auth/login
- * Uses JSON body, adds Bearer token header only if one already exists
- * (via jsonFetch → getAuthHeader).
  */
 export async function loginApi(payload: LoginPayload): Promise<LoginResponse> {
   const base = getBackendBase();
@@ -183,9 +217,9 @@ export async function loginApi(payload: LoginPayload): Promise<LoginResponse> {
   });
 }
 
-// lib/api.ts
-
-/* ... keep all your existing helpers: ENV_BASE_URL, getBackendBase, jsonFetch, etc ... */
+/* ------------------------------------------------------------------ */
+/*                           SERVICES LIST                             */
+/* ------------------------------------------------------------------ */
 
 type BackendService = {
   _id: string;
@@ -213,7 +247,7 @@ type ServicesResponse =
   | BackendService[];
 
 // helper to build full image URL from relative path
-function buildServiceImageUrl(imagePath?: string): string | null {
+function buildServiceImageUrl(imagePath?: string | null): string | null {
   if (!imagePath) return null;
 
   // already absolute
@@ -230,12 +264,7 @@ function buildServiceImageUrl(imagePath?: string): string | null {
 }
 
 /**
- * Fetch services for the landing page.
- * Uses your real backend shape:
- * {
- *   data: [ { _id, name, slug, description, cta_text, image, ... }, ... ],
- *   meta: { ... }
- * }
+ * Fetch services for the landing page: GET /services
  */
 export async function fetchServices(): Promise<Service[]> {
   const base = getBackendBase();
@@ -261,8 +290,9 @@ export async function fetchServices(): Promise<Service[]> {
   }));
 }
 
-
-// lib/api.ts
+/* ------------------------------------------------------------------ */
+/*                         USER / PROFILE APIs                        */
+/* ------------------------------------------------------------------ */
 
 export type LoggedInUser = {
   _id: string;
@@ -283,25 +313,58 @@ export type LoggedInUser = {
   [key: string]: any;
 };
 
-// backend might return just the user object, or { user: LoggedInUser }
-// we support both to be safe
-type MeResponse = LoggedInUser | { user: LoggedInUser };
+// backend might return just the user object, or { user: ... }
+type MeResponse = LoggedInUser | { user: any };
 
+/**
+ * GET /users/me
+ * Normalizes backend shape into a consistent LoggedInUser.
+ */
 export async function getLoggedInUserApi(): Promise<LoggedInUser> {
-  const base = getBackendBase(); // e.g. http://192.168.13.75:8000/api
+  const base = getBackendBase();
 
-  const data = await jsonFetch<MeResponse>(`${base}/users/me`, {
+  const data = await jsonFetch<MeResponse | any>(`${base}/users/me`, {
     method: "GET",
-    // jsonFetch already adds:
-    // - Content-Type: application/json
-    // - Authorization: Bearer <token> (from localStorage)
   });
-  console.log("Fetched user data:", data);
 
-  if ("user" in data) {
-    return data.user;
-  }
-  return data; // direct object case (your example)
+  console.log("Fetched user data from /users/me:", data);
+
+  const raw: any = (data as any).user ?? data;
+
+  const fullName: string = raw.name ?? "";
+  const [firstFromName, ...restName] = fullName.split(" ").filter(Boolean);
+
+  const loggedInUser: LoggedInUser = {
+    _id: raw._id ?? raw.id ?? "",
+    firstName:
+      raw.firstName ??
+      raw.first_name ??
+      firstFromName ??
+      "",
+    lastName:
+      raw.lastName ??
+      raw.last_name ??
+      (restName.length ? restName.join(" ") : ""),
+    gender: raw.gender ?? raw.sex ?? "",
+    email: raw.email ?? "",
+    phone: raw.phone ?? raw.mobile ?? "",
+    dob: raw.dob ?? raw.dateOfBirth ?? undefined,
+
+    address_line1:
+      raw.address_line1 ?? raw.address1 ?? raw.address_line_1 ?? "",
+    address_line2:
+      raw.address_line2 ?? raw.address2 ?? raw.address_line_2 ?? "",
+    city: raw.city ?? "",
+    county: raw.county ?? raw.state ?? "",
+    postalcode:
+      raw.postalcode ?? raw.postcode ?? raw.zip ?? "",
+    country: raw.country ?? "United Kingdom",
+
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+  };
+
+  return loggedInUser;
 }
 
 /* ---------- Patient profile: update /users/:id ---------- */
@@ -320,18 +383,44 @@ export type UpdatePatientPayload = {
   country?: string;
 };
 
+/**
+ * PUT /users/:id
+ * Sends both camelCase and snake_case so backend is always happy.
+ */
 export async function updatePatientApi(
   userId: string,
   payload: UpdatePatientPayload
 ): Promise<LoggedInUser> {
-  const base = getBackendBase(); // e.g. http://localhost:8000/api or tenant base
+  const base = getBackendBase();
+
+  const bodyToSend: any = {
+    ...payload,
+  };
+
+  // snake_case mapping
+  if (payload.firstName !== undefined) {
+    bodyToSend.first_name = payload.firstName;
+  }
+  if (payload.lastName !== undefined) {
+    bodyToSend.last_name = payload.lastName;
+  }
+
+  // combined "name" field for older schemas
+  if (
+    payload.firstName !== undefined ||
+    payload.lastName !== undefined
+  ) {
+    const first = payload.firstName ?? "";
+    const last = payload.lastName ?? "";
+    const name = `${first} ${last}`.trim();
+    if (name) bodyToSend.name = name;
+  }
 
   return jsonFetch<LoggedInUser>(`${base}/users/${userId}`, {
     method: "PUT",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(bodyToSend),
   });
 }
-
 
 /* ---------- Patient password: POST /users/changePassword/:id ---------- */
 
@@ -345,7 +434,7 @@ export async function changePasswordApi(
   userId: string,
   payload: ChangePasswordPayload
 ): Promise<any> {
-  const base = getBackendBase(); // e.g. http://localhost:8000/api
+  const base = getBackendBase();
 
   return jsonFetch<any>(`${base}/users/changePassword/${userId}`, {
     method: "POST",
@@ -353,10 +442,10 @@ export async function changePasswordApi(
   });
 }
 
+/* ------------------------------------------------------------------ */
+/*                              ORDERS                                */
+/* ------------------------------------------------------------------ */
 
-/* ------------------- Orders types ------------------- */
-
-// 🔹 Types
 export type OrderLine = {
   index: number;
   name: string;
@@ -397,47 +486,22 @@ export type OrderDto = {
   meta?: OrderMeta;
 };
 
-export type OrdersListResponse = {
-  data: OrderDto[];
-  meta: {
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  };
+export type OrdersListMeta = {
+  total: number;
+  page: number;
+  limit: number;
+  pages?: number; // backend might use this
+  totalPages?: number; // or this
 };
 
-// 🔹 Helper to call backend with Bearer token (you already have something like this)
-async function apiFetch<T>(
-  path: string,
-  options: RequestInit = {}
-): Promise<T> {
-  const baseUrl =getBackendBase();
+export type OrdersListResponse = {
+  data: OrderDto[];
+  meta: OrdersListMeta;
+};
 
-  // however you get token – from cookies, localStorage, AuthContext, etc.
-  const token =
-    typeof window !== "undefined"
-      ? window.localStorage.getItem("pharmacy_token")
-      : null;
-
-  const res = await fetch(`${baseUrl}${path}`, {
-    ...options,
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(text || `Request failed with status ${res.status}`);
-  }
-
-  return res.json() as Promise<T>;
-}
-
-// 🔹 The orders API helper
+/**
+ * GET /orders?user_id=...&page=&limit=
+ */
 export async function getUserOrdersApi(
   userId: string,
   page = 1,
@@ -449,15 +513,38 @@ export async function getUserOrdersApi(
     limit: String(limit),
   });
 
-  // e.g. GET http://localhost:8000/api/orders?user_id=...&page=1&limit=20
   return apiFetch<OrdersListResponse>(`/orders?${params.toString()}`, {
     method: "GET",
   });
 }
 
+/**
+ * POST /orders
+ */
+export type CreateOrderPayload = {
+  user_id: string;
+  schedule_id: string;
+  service_id: string;
+  reference: string;
+  start_at: string;
+  end_at: string;
+  meta?: OrderMeta;
+  payment_status?: string;
+};
 
-// lib/pageApi.ts
+export async function createOrderApi(
+  payload: CreateOrderPayload
+): Promise<OrderDto> {
+  const base = getBackendBase();
+  return jsonFetch<OrderDto>(`${base}/orders`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
 
+/* ------------------------------------------------------------------ */
+/*                               PAGES                                */
+/* ------------------------------------------------------------------ */
 
 export type Page = {
   _id: string;
@@ -485,14 +572,12 @@ export type Page = {
   service_id?: string;
 };
 
-export const API_BASE =getBackendBase();
-
 /**
  * Fetch a page by slug from: GET /pages/slug/:slug
  */
 export async function fetchPageBySlug(slug: string): Promise<Page> {
   if (!API_BASE) {
-    throw new Error("Missing env var");
+    throw new Error("Missing base URL");
   }
 
   const res = await fetch(
@@ -500,6 +585,9 @@ export async function fetchPageBySlug(slug: string): Promise<Page> {
     {
       cache: "no-store",
       next: { revalidate: 0 },
+      headers: {
+        ...getAuthHeader(),
+      },
     }
   );
 
@@ -514,3 +602,1214 @@ export async function fetchPageBySlug(slug: string): Promise<Page> {
   return res.json();
 }
 
+/* ------------------------------------------------------------------ */
+/*                         SERVICE DETAIL BY SLUG                     */
+/* ------------------------------------------------------------------ */
+
+export type ServiceDetail = {
+  _id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  // backend-style
+  booking_flow?: string | null;
+  reorder_flow?: string | null;
+  forms_assignment?: string | null;
+  // frontend-friendly aliases
+  bookingFlow?: string | null;
+  reorderFlow?: string | null;
+  formsAssignment?: string | null;
+  status?: string;
+  active?: boolean;
+  view_type?: string;
+  cta_text?: string;
+  image?: string | null;
+  service_type?: string | null;
+  serviceType?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: any;
+};
+
+type BackendServiceDetail = BackendService & {
+  booking_flow?: string | null;
+  reorder_flow?: string | null;
+  forms_assignment?: string | null;
+  service_type?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+/**
+ * GET /services/slug/:slug
+ */
+export async function fetchServiceBySlug(
+  slug: string
+): Promise<ServiceDetail> {
+  const base = getBackendBase();
+
+  const raw = await jsonFetch<BackendServiceDetail>(
+    `${base}/services/slug/${encodeURIComponent(slug)}`,
+    {
+      method: "GET",
+      cache: "no-store",
+    }
+  );
+
+  const description =
+    raw.description ||
+    "This service is available at Pharmacy Express. Learn more.";
+
+  const image = buildServiceImageUrl(raw.image);
+
+  const serviceDetail: ServiceDetail = {
+    _id: raw._id,
+    name: raw.name,
+    slug: raw.slug,
+    description,
+    cta_text: raw.cta_text || "Book",
+    image,
+    status: raw.status ?? "published",
+    active: raw.active ?? true,
+    view_type: raw.view_type ?? "card",
+
+    // backend snake_case
+    booking_flow: raw.booking_flow ?? null,
+    reorder_flow: raw.reorder_flow ?? null,
+    forms_assignment: raw.forms_assignment ?? null,
+    service_type: raw.service_type ?? null,
+
+    // frontend camelCase aliases
+    bookingFlow: raw.booking_flow ?? null,
+    reorderFlow: raw.reorder_flow ?? null,
+    formsAssignment: raw.forms_assignment ?? null,
+    serviceType: raw.service_type ?? null,
+
+    createdAt: raw.createdAt,
+    updatedAt: raw.updatedAt,
+  };
+
+  return serviceDetail;
+}
+
+/* ------------------------------------------------------------------ */
+/*                        SERVICE MEDICINES APIs                      */
+/* ------------------------------------------------------------------ */
+
+export type ServiceMedicineDto = {
+  _id: string;
+  sku: string;
+  name: string;
+  variations?: string | string[];
+  strength?: string;
+  qty: number;
+  unitMinor?: number;
+  totalMinor?: number;
+  variation?: string;
+  price?: number;
+  image?: string;
+  description?: string;
+  status?: string | null;
+  min?: number;
+  max?: number;
+  min_qty?: number;
+  max_qty?: number;
+  [key: string]: any;
+};
+
+/**
+ * GET /service-medicines/service/:serviceId
+ */
+export async function fetchServiceMedicinesByServiceId(
+  serviceId: string
+): Promise<ServiceMedicineDto[]> {
+  const base = getBackendBase();
+  return jsonFetch<ServiceMedicineDto[]>(
+    `${base}/service-medicines/service/${encodeURIComponent(serviceId)}`,
+    {
+      method: "GET",
+    }
+  );
+}
+
+/**
+ * Generic media URL builder for ANY backend image.
+ */
+export function buildMediaUrl(imagePath?: string | null): string {
+  if (!imagePath) return "/images/product-placeholder.svg";
+
+  if (imagePath.startsWith("http://") || imagePath.startsWith("https://")) {
+    return imagePath;
+  }
+
+  const base = getBackendBase();
+  const origin = base.replace(/\/api\/?$/, ""); // http://host:8000
+
+  if (imagePath.startsWith("/")) return `${origin}${imagePath}`;
+  return `${origin}/${imagePath}`;
+}
+
+/* ------------------------------------------------------------------ */
+/*                            RAF / Clinic Forms                      */
+/* ------------------------------------------------------------------ */
+
+export type ClinicFormDto = {
+  _id: string;
+  name?: string;
+  description?: string;
+  form_type?: string;
+  is_active?: boolean;
+  raf_status?: string;
+  service_id?: string;
+  service_slug?: string;
+  schema?: any;
+  raf_schema?: any;
+  questions?: any;
+};
+
+/**
+ * GET /clinic-forms
+ * Returns either { data: ClinicFormDto[] } or a plain array.
+ */
+export async function fetchClinicForms(): Promise<ClinicFormDto[]> {
+  const base = getBackendBase();
+  const raw = await jsonFetch<any>(`${base}/clinic-forms`, {
+    method: "GET",
+  });
+
+  if (Array.isArray(raw?.data)) return raw.data as ClinicFormDto[];
+  if (Array.isArray(raw)) return raw as ClinicFormDto[];
+  return [];
+}
+
+/**
+ * Convenience helper:
+ *  - finds the active RAF form for a service (by slug or serviceId)
+ *  - then loads the full form by id to get the schema
+ */
+export async function fetchRafFormForService(
+  serviceSlug: string,
+  serviceId?: string | null
+): Promise<{ form: ClinicFormDto; schema: any } | null> {
+  const base = getBackendBase();
+
+  const forms = await fetchClinicForms();
+
+  const candidates = forms.filter((f) => {
+    const matchesSlug =
+      f.service_slug && String(f.service_slug) === String(serviceSlug);
+    const matchesId =
+      serviceId && f.service_id && String(f.service_id) === String(serviceId);
+    const isRaf = (f.form_type || "").toLowerCase() === "raf";
+    const isActive = f.is_active !== false;
+    return (matchesSlug || matchesId) && isRaf && isActive;
+  });
+
+  const picked = candidates[0];
+  if (!picked?._id) return null;
+
+  const detail = await jsonFetch<ClinicFormDto>(
+    `${base}/clinic-forms/${encodeURIComponent(picked._id)}`,
+    {
+      method: "GET",
+    }
+  );
+
+  const schema =
+    detail.schema ?? detail.raf_schema ?? detail.questions ?? null;
+
+  return { form: detail, schema };
+}
+
+/* ------------------------------------------------------------------ */
+/*                  Consultation session + RAF answers                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * POST /consultations/sessions
+ * Body: { service_slug }
+ * Returns the numeric session id (or null if it can't be created).
+ */
+export async function createConsultationSessionApi(
+  serviceSlug: string
+): Promise<number | null> {
+  const base = getBackendBase();
+
+  const data = await jsonFetch<any>(`${base}/consultations/sessions`, {
+    method: "POST",
+    body: JSON.stringify({ service_slug: serviceSlug }),
+  });
+
+  const sid = Number(data?.session_id ?? data?.id);
+  return Number.isFinite(sid) && sid > 0 ? sid : null;
+}
+
+/**
+ * POST /consultations/:id/answers
+ * Saves RAF answers for the given consultation session.
+ */
+export async function saveRafAnswersApi(
+  sessionId: number,
+  slug: string,
+  answers: Record<string, any>
+): Promise<void> {
+  const base = getBackendBase();
+
+  await jsonFetch<any>(
+    `${base}/consultations/${encodeURIComponent(String(sessionId))}/answers`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        form_type: "raf",
+        service_slug: slug,
+        session_id: sessionId,
+        answers,
+      }),
+    }
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*                           RAF file upload                          */
+/* ------------------------------------------------------------------ */
+
+export type IntakeUploadResult = {
+  ok: boolean;
+  url?: string;
+  path?: string;
+  message?: string;
+};
+
+/**
+ * POST /uploads/intake-image
+ * Uses FormData (so we DON'T use jsonFetch here).
+ */
+export async function uploadRafFile(
+  file: File,
+  kind: string = "raf"
+): Promise<IntakeUploadResult> {
+  const base = getBackendBase();
+  const tokenHeader = getAuthHeader();
+
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("kind", kind);
+
+  const res = await fetch(`${base}/uploads/intake-image`, {
+    method: "POST",
+    headers: {
+      // IMPORTANT: do NOT set Content-Type here, browser will set multipart boundary
+      ...tokenHeader,
+    },
+    body: fd,
+  });
+
+  let data: any = {};
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
+  }
+
+  if (!res.ok || data?.ok !== true) {
+    return {
+      ok: false,
+      message: data?.message || `Upload failed (${res.status})`,
+    };
+  }
+
+  return {
+    ok: true,
+    url: data.url,
+    path: data.path,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*                  Calendar / Schedules & Slots                      */
+/* ------------------------------------------------------------------ */
+
+export type WeekDay = "mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun";
+
+export type WeekConfig = {
+  day: WeekDay;
+  open: boolean;
+  start: string | null; // "09:00"
+  end: string | null; // "17:00"
+  break_start: string | null; // "12:30"
+  break_end: string | null; // "13:00"
+};
+
+export type OverrideConfig = {
+  date: string; // "YYYY-MM-DD"
+  open: boolean;
+  start: string | null;
+  end: string | null;
+  note?: string | null;
+};
+
+export type Schedule = {
+  _id: string;
+  name: string;
+  service_slug: string;
+  service_id: string;
+  timezone: string;
+  slot_minutes: number;
+  capacity: number;
+  week: WeekConfig[];
+  overrides: OverrideConfig[];
+};
+
+export type Slot = {
+  time: string;
+  start_at: string; // ISO
+  available: boolean;
+  remaining: number;
+};
+
+export type DayMeta = {
+  open: boolean;
+  hasOverride?: boolean;
+  start?: string;
+  end?: string;
+  overrideNote?: string;
+  reason?: string;
+};
+
+type SchedulesResponse = { data: Schedule[]; meta?: any } | Schedule[];
+
+// Small date helpers re-usable in calendar UIs
+export function dateToYmd(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+export function addDaysUtc(date: Date, days: number): Date {
+  const d = new Date(date);
+  d.setDate(d.getDate() + days);
+  return d;
+}
+
+export function formatYmdForDisplay(
+  yyyyMmDd: string,
+  locale = "en-GB"
+): string {
+  const d = new Date(yyyyMmDd + "T00:00:00");
+  return d.toLocaleDateString(locale, {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+  });
+}
+
+/**
+ * Fetch schedules and pick one matching a service slug
+ */
+export async function fetchScheduleForServiceSlug(
+  serviceSlug: string
+): Promise<Schedule> {
+  const base = getBackendBase();
+
+  const raw = await jsonFetch<SchedulesResponse>(`${base}/schedules`, {
+    method: "GET",
+    cache: "no-store",
+  });
+
+  const list: Schedule[] = Array.isArray(raw) ? raw : raw.data || [];
+
+  const match =
+    list.find((s) => s.service_slug === serviceSlug) || list[0];
+
+  if (!match) {
+    throw new Error("No schedule configured for this service yet.");
+  }
+
+  // Persist schedule_id so other flows (order creation) can reuse it
+  try {
+    if (typeof window !== "undefined" && match._id) {
+      window.localStorage.setItem("schedule_id", match._id);
+      window.sessionStorage.setItem("schedule_id", match._id);
+    }
+  } catch {
+    // ignore storage issues
+  }
+
+  return match;
+}
+
+// ---- Slot building logic (pure) ----
+
+const CAL_DAY_MAP: WeekDay[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+function toMinutes(hhmm: string | null | undefined): number | null {
+  if (!hhmm) return null;
+  const m = hhmm.match(/^(\d{2}):(\d{2})$/);
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const min = parseInt(m[2], 10);
+  if (!Number.isFinite(h) || !Number.isFinite(min)) return null;
+  return h * 60 + min;
+}
+
+export function buildSlotsForDate(
+  schedule: Schedule,
+  yyyyMmDd: string
+): { slots: Slot[]; meta: DayMeta } {
+  const js = new Date(yyyyMmDd + "T00:00:00");
+  if (Number.isNaN(js.getTime())) {
+    return {
+      slots: [],
+      meta: { open: false, reason: "Invalid date" },
+    };
+  }
+
+  const dayKey = CAL_DAY_MAP[js.getDay()];
+  const meta: DayMeta = { open: false };
+
+  // Weekly config
+  const weekCfg = schedule.week?.find((w) => w.day === dayKey) || null;
+  if (!weekCfg || !weekCfg.open) {
+    meta.open = false;
+    meta.reason = "Closed on this weekday";
+  }
+
+  let start = weekCfg?.start ?? null;
+  let end = weekCfg?.end ?? null;
+  let breakStart = weekCfg?.break_start ?? null;
+  let breakEnd = weekCfg?.break_end ?? null;
+
+  // Overrides
+  const override = schedule.overrides?.find((o) => o.date === yyyyMmDd);
+  if (override) {
+    meta.hasOverride = true;
+    meta.overrideNote = override.note || undefined;
+
+    if (!override.open) {
+      meta.open = false;
+      meta.reason = override.note || "Closed for this date";
+      return { slots: [], meta };
+    }
+
+    if (override.start) start = override.start;
+    if (override.end) end = override.end;
+  }
+
+  const startMin = start ? toMinutes(start) : null;
+  const endMin = end ? toMinutes(end) : null;
+
+  if (startMin == null || endMin == null || endMin <= startMin) {
+    meta.open = false;
+    meta.reason = "No valid opening hours for this day";
+    return { slots: [], meta };
+  }
+
+  const breakStartMin = breakStart ? toMinutes(breakStart) : null;
+  const breakEndMin = breakEnd ? toMinutes(breakEnd) : null;
+
+  let slotMinutes = schedule.slot_minutes || 15;
+  if (!Number.isFinite(slotMinutes) || slotMinutes <= 0) slotMinutes = 15;
+
+  const slots: Slot[] = [];
+  const now = new Date();
+
+  for (let m = startMin; m + slotMinutes <= endMin; m += slotMinutes) {
+    const inBreak =
+      breakStartMin != null &&
+      breakEndMin != null &&
+      breakEndMin > breakStartMin &&
+      m >= breakStartMin &&
+      m < breakEndMin;
+    if (inBreak) continue;
+
+    const hh = Math.floor(m / 60);
+    const mm = m % 60;
+    const timeLabel = `${pad2(hh)}:${pad2(mm)}`;
+    const iso = `${yyyyMmDd}T${timeLabel}:00Z`; // treated as UTC
+
+    const slotDate = new Date(iso);
+    const isPast = slotDate.getTime() < now.getTime();
+
+    slots.push({
+      time: timeLabel,
+      start_at: iso,
+      available: !isPast,
+      remaining: isPast ? 0 : schedule.capacity,
+    });
+  }
+
+  meta.open = slots.length > 0;
+  meta.start = start ?? undefined;
+  meta.end = end ?? undefined;
+  if (!meta.open && !meta.reason) {
+    meta.reason = "No slots left for this day";
+  }
+
+  return { slots, meta };
+}
+
+/* ------------------------------------------------------------------ */
+/*              Appointment + RAF Answers Storage Helpers             */
+/* ------------------------------------------------------------------ */
+
+function splitIsoToParts(iso: string): { date: string; time: string } {
+  const m = iso.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
+  if (m) return { date: m[1], time: m[2] };
+
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { date: "", time: "" };
+
+  const date = dateToYmd(d);
+  const time = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  return { date, time };
+}
+
+export function persistAppointmentSelection(
+  iso: string,
+  opts?: { label?: string; serviceSlug?: string }
+) {
+  const { date, time } = splitIsoToParts(iso);
+  const pretty = new Date(iso).toLocaleString("en-GB", {
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("appointment_at", iso);
+      window.sessionStorage.setItem("appointment_at", iso);
+
+      if (date) {
+        window.localStorage.setItem("appointment_date", date);
+        window.sessionStorage.setItem("appointment_date", date);
+      }
+      if (time) {
+        window.localStorage.setItem("appointment_time", time);
+        window.sessionStorage.setItem("appointment_time", time);
+      }
+      if (opts?.label) {
+        window.localStorage.setItem("appointment_time_label", opts.label);
+      }
+      window.localStorage.setItem("appointment_pretty", pretty);
+
+      if (opts?.serviceSlug) {
+        window.localStorage.setItem("service_slug", opts.serviceSlug);
+        window.sessionStorage.setItem("service_slug", opts.serviceSlug);
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export type StoredUser = {
+  userId?: string;
+  _id?: string;
+  id?: string;
+  firstName?: string;
+  lastName?: string;
+  email?: string;
+  phone?: string;
+  dob?: string;
+  [key: string]: any;
+};
+
+export function getStoredUserFromStorage(): StoredUser | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw =
+      window.localStorage.getItem("user") ||
+      window.localStorage.getItem("user_data") ||
+      window.localStorage.getItem("pe_user") ||
+      window.localStorage.getItem("pe.user");
+    if (!raw) return null;
+    return JSON.parse(raw) as StoredUser;
+  } catch {
+    return null;
+  }
+}
+
+export function getConsultationSessionIdFromStorage(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const keys = [
+      "consultation_session_id",
+      "pe_consultation_session_id",
+      "consultationSessionId",
+    ];
+    for (const k of keys) {
+      const raw =
+        window.localStorage.getItem(k) ||
+        window.sessionStorage.getItem(k) ||
+        "";
+      const n = Number(raw);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export function readRafAnswersFromStorage(
+  slug: string
+): Record<string, any> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const keys = [
+      `raf_answers.${slug}`,
+      `raf.answers.${slug}`,
+      `assessment.answers.${slug}`,
+    ];
+    for (const k of keys) {
+      const raw = window.localStorage.getItem(k);
+      if (!raw) continue;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+export function buildRafQAFromStorage(slug: string): any[] {
+  const answers = readRafAnswersFromStorage(slug);
+  if (!answers) return [];
+  const out: any[] = [];
+  Object.entries(answers).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+    const answer = Array.isArray(value) ? value.join(", ") : String(value);
+    out.push({
+      key,
+      question: key,
+      answer,
+      raw: value,
+    });
+  });
+  return out;
+}
+
+export function resolveUserIdFromStorage(
+  currentUser?: { _id?: string } | null
+): string | null {
+  const stored = getStoredUserFromStorage();
+  const fromStored = stored?.userId || stored?._id || stored?.id || null;
+  if (fromStored) return String(fromStored);
+  if (currentUser?._id) return String(currentUser._id);
+  return null;
+}
+
+
+
+
+/* ------------------------------------------------------------------ */
+/*                          Cart + payments                           */
+/* ------------------------------------------------------------------ */
+
+export type CartItem = {
+  sku: string;
+  name: string;
+  qty: number;
+  price?: number;      // in pounds
+  priceMinor?: number; // in minor units (pence)
+  unitMinor?: number;
+  totalMinor?: number;
+  label?: string;      // variation label
+};
+
+export type CartTotals = {
+  lines: CartItem[];
+  subtotalMinor: number;
+  feesMinor: number;
+  totalMinor: number;
+};
+
+export type LastPaymentItem = {
+  sku: string;
+  name: string;
+  variations: string | null;
+  qty: number;
+  unitMinor: number;
+  totalMinor: number;
+};
+
+export type LastPaymentPayload = {
+  ref: string;
+  amountMinor: number;
+  ts: number;
+  slug: string;
+  appointment_at: string | null;
+  sessionId?: string;
+  items: LastPaymentItem[];
+};
+
+export function makeRefFromSlug(slug: string): string {
+  const cleaned = (slug || "").replace(/[^a-zA-Z]+/g, " ").trim();
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+
+  let letters = tokens
+    .slice(0, 2)
+    .map((s) => s[0].toUpperCase())
+    .join("");
+
+  if (letters.length < 2 && tokens[0]) {
+    letters = tokens[0].slice(0, 2).toUpperCase();
+  }
+  if (letters.length < 2) letters = "AA";
+
+  const num = String(Date.now()).slice(-6);
+  return `P${letters}${num}`;
+}
+
+export function computeCartTotals(lines: CartItem[]): CartTotals {
+  let subtotalMinor = 0;
+
+  const normalised = (lines || []).map((it) => {
+    const unit = Number.isFinite(it.unitMinor)
+      ? (it.unitMinor as number)
+      : Number.isFinite(it.priceMinor)
+      ? (it.priceMinor as number)
+      : Math.round(((it.price ?? 0) as number) * 100);
+
+    const total =
+      Number.isFinite(it.totalMinor) && (it.totalMinor as number) > 0
+        ? (it.totalMinor as number)
+        : unit * (it.qty || 1);
+
+    subtotalMinor += total;
+
+    return {
+      ...it,
+      unitMinor: unit,
+      totalMinor: total,
+    };
+  });
+
+  const feesMinor = 0;
+  const totalMinor = subtotalMinor + feesMinor;
+
+  return {
+    lines: normalised,
+    subtotalMinor,
+    feesMinor,
+    totalMinor,
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/*                     Generic JSON / number helpers                  */
+/* ------------------------------------------------------------------ */
+
+export function safeParseJson<T = any>(value: any): T | null {
+  try {
+    if (!value) return null;
+    return JSON.parse(String(value)) as T;
+  } catch {
+    return null;
+  }
+}
+
+export function toInt(x: any): number {
+  const n = Number(x);
+  return Number.isFinite(n) ? Math.trunc(n) : 0;
+}
+
+export function toMinor(val: any): number {
+  if (val == null || val === "") return 0;
+  const s = String(val);
+  const num = Number(val);
+  if (Number.isNaN(num)) return 0;
+  return s.includes(".") ? Math.round(num * 100) : Math.round(num);
+}
+
+/* ------------------------------------------------------------------ */
+/*                    Normalising payment / order items               */
+/* ------------------------------------------------------------------ */
+
+export function normalisePaymentItem(raw: any): LastPaymentItem {
+  const qty = Math.max(
+    1,
+    Number(raw?.qty) || Number(raw?.quantity) || 1
+  );
+
+  let variation: string | null =
+    (raw?.variations ??
+      raw?.variation ??
+      raw?.optionLabel ??
+      raw?.selectedLabel ??
+      raw?.label ??
+      raw?.strength ??
+      raw?.dose ??
+      null) || null;
+
+  let name =
+    (raw?.product?.name ||
+      raw?.baseName ||
+      raw?.name ||
+      raw?.title ||
+      "Item") + "";
+  name = name.trim();
+
+  const sku = (raw?.sku || raw?.slug || raw?.id || "item") + "";
+
+  if (!variation) {
+    const m = /^(.+?)\s+(\d[\s\S]*)$/.exec(name);
+    if (m && m[1] && m[2]) {
+      name = m[1].trim();
+      variation = m[2].trim() || null;
+    }
+  }
+
+  const unitMinor = toMinor(
+    raw?.unitMinor ??
+      raw?.priceMinor ??
+      raw?.amountMinor ??
+      raw?.unit_price ??
+      raw?.price ??
+      0
+  );
+  const totalMinor =
+    typeof raw?.totalMinor === "number"
+      ? raw.totalMinor
+      : unitMinor * qty;
+
+  return {
+    sku,
+    name,
+    variations: variation,
+    qty,
+    unitMinor,
+    totalMinor,
+  };
+}
+
+/**
+ * Merge items from last_payment + cart, deduping "combined" lines.
+ */
+export function mergePaymentItemsFromSources(
+  fromLast: any,
+  fromCart: any[]
+): LastPaymentItem[] {
+  const cart: any[] = Array.isArray(fromCart) ? fromCart : [];
+  const lastRaw: any[] = Array.isArray(fromLast) ? fromLast : [];
+
+  const last = cart.length
+    ? lastRaw.filter((r) => {
+        const sku = String(r?.sku || "");
+        const variations = String(
+          r?.variations ?? r?.variation ?? ""
+        );
+        const looksCombined =
+          sku === "item" || variations.includes(" • ");
+        return !looksCombined;
+      })
+    : lastRaw;
+
+  const merged = [...cart, ...last];
+  const seen = new Set<string>();
+  const out: LastPaymentItem[] = [];
+
+  for (const raw of merged) {
+    const i = normalisePaymentItem(raw);
+    const key = `${i.sku}::${i.variations || ""}::${i.name}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(i);
+    }
+  }
+
+  return out;
+}
+
+/* ------------------------------------------------------------------ */
+/*                     last_payment payload helpers                   */
+/* ------------------------------------------------------------------ */
+
+export function buildLastPaymentPayload(
+  ref: string,
+  totals: CartTotals,
+  slug: string,
+  appointmentAtIso: string | null
+): LastPaymentPayload {
+  const mapped: LastPaymentItem[] = (totals.lines || []).map((it) => ({
+    sku: String(it.sku || "item"),
+    name: String(it.name || "Item"),
+    variations: (it.label || null) as string | null,
+    qty: Math.max(1, Number(it.qty) || 1),
+    unitMinor: Number(it.unitMinor || 0) || 0,
+    totalMinor: Number(it.totalMinor || 0) || 0,
+  }));
+
+  let sessionId: string | undefined = undefined;
+  try {
+    const s1 =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("consultation_session_id") || ""
+        : "";
+    const s2 =
+      typeof window !== "undefined"
+        ? window.sessionStorage.getItem("consultation_session_id") ||
+          ""
+        : "";
+    sessionId = (s1 || s2 || "").trim() || undefined;
+  } catch {
+    // ignore
+  }
+
+  return {
+    ref,
+    amountMinor: totals.totalMinor,
+    ts: Date.now(),
+    slug: slug || "",
+    appointment_at: appointmentAtIso || null,
+    sessionId,
+    items: mapped,
+  };
+}
+
+export function persistLastPayment(payload: LastPaymentPayload) {
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(
+      "last_payment",
+      JSON.stringify(payload)
+    );
+    window.localStorage.setItem("orders_dirty", "1");
+    window.localStorage.setItem("clear_cart", "1");
+  } catch {
+    // ignore
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*                       Ryft session + SDK helpers                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Call your Next.js API route that creates a Ryft payment session.
+ * Must be implemented in /app/api/pay/ryft/session/route.ts
+ */
+export async function createRyftSessionApi(params: {
+  amountMinor: number;
+  currency: string;
+  reference: string;
+  description?: string;
+}): Promise<string> {
+  const res = await fetch("/api/pay/ryft/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      amount: params.amountMinor,
+      currency: params.currency,
+      description: params.description ?? "Clinic payment",
+      reference: params.reference,
+    }),
+    cache: "no-store",
+  });
+
+  const text = await res.text();
+  let data: any = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {};
+  }
+
+  const friendly = (s: string) => {
+    if (!s) return "";
+    const trimmed = s.trim();
+    if (
+      trimmed.startsWith("<!DOCTYPE") ||
+      trimmed.startsWith("<html")
+    ) {
+      return "Could not create payment session (404). Is /api/pay/ryft/session implemented and reachable?";
+    }
+    return trimmed.slice(0, 400);
+  };
+
+  if (!res.ok) {
+    const msg = friendly(
+      data?.detail || data?.message || text || "Could not create payment session"
+    );
+    throw new Error(msg);
+  }
+
+  const secret = data?.clientSecret;
+  if (!secret) {
+    throw new Error("Server did not return clientSecret");
+  }
+
+  return secret;
+}
+
+/**
+ * Wait until the Ryft SDK script has attached window.Ryft
+ */
+export function ensureRyftSdkLoaded(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === "undefined") {
+      reject(new Error("No window"));
+      return;
+    }
+
+    if ((window as any).Ryft) {
+      resolve();
+      return;
+    }
+
+    let tries = 0;
+    const timer = setInterval(() => {
+      tries++;
+      if ((window as any).Ryft) {
+        clearInterval(timer);
+        resolve();
+      } else if (tries > 50) {
+        clearInterval(timer);
+        reject(new Error("Ryft SDK not loaded"));
+      }
+    }, 100);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*             Pending order creation & status helpers                */
+/* ------------------------------------------------------------------ */
+
+const SUCCESS_DONE_PREFIX = "success_done_";
+
+export function wasSuccessProcessed(ref: string): boolean {
+  if (!ref) return false;
+  try {
+    if (typeof window === "undefined") return false;
+    return !!window.localStorage.getItem(SUCCESS_DONE_PREFIX + ref);
+  } catch {
+    return false;
+  }
+}
+
+export function markSuccessProcessed(ref: string) {
+  if (!ref) return;
+  try {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(SUCCESS_DONE_PREFIX + ref, "1");
+  } catch {
+    // ignore
+  }
+}
+
+export function buildLocalOrderPreview(params: {
+  ref: string;
+  amountMinor: number;
+  items: LastPaymentItem[];
+}) {
+  const { ref, amountMinor, items } = params;
+  return {
+    id: ref || `temp-${Date.now()}`,
+    reference: ref || undefined,
+    createdAt: new Date().toISOString(),
+    status: "Pending",
+    totalMinor: amountMinor,
+    items: items.map((i) => ({
+      sku: i.sku || "item",
+      name: i.name,
+      variations: i.variations ?? null,
+      variation: i.variations ?? null,
+      strength: i.variations ?? null,
+      qty: i.qty,
+      unitMinor: i.unitMinor,
+      totalMinor:
+        i.totalMinor ?? i.unitMinor * Math.max(1, i.qty || 1),
+    })),
+  };
+}
+
+export function storeLocalOrderPreview(order: any) {
+  try {
+    if (typeof window === "undefined") return;
+    const key = "local_orders";
+    const prev: any[] =
+      safeParseJson(window.localStorage.getItem(key)) || [];
+    const refKey = String(order.reference || order.id || "");
+    const dedup = (Array.isArray(prev) ? prev : []).filter(
+      (p) =>
+        String(p?.reference || p?.id || "") !== refKey
+    );
+    const next = [order, ...dedup].slice(0, 5);
+    window.localStorage.setItem(key, JSON.stringify(next));
+    window.dispatchEvent(new Event("orders:updated"));
+  } catch {
+    // ignore
+  }
+}
+
+const pendingOrderInFlight = new Set<string>();
+
+/**
+ * Idempotent wrapper around POST /api/orders/pending.
+ * Ensures we only POST once per `ref`, even if React effects
+ * run multiple times.
+ */
+export async function postPendingOrderOnce(
+  ref: string,
+  body: any
+): Promise<void> {
+  if (!ref) return;
+
+  // in-memory guard (same page load / StrictMode)
+  if (pendingOrderInFlight.has(ref)) return;
+
+  // persisted guard (across reloads)
+  if (wasSuccessProcessed(ref)) return;
+
+  pendingOrderInFlight.add(ref);
+  try {
+    await fetch("/api/orders/pending", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+
+    // mark as processed so we never re-post for this ref
+    markSuccessProcessed(ref);
+  } catch {
+    // on error we DON'T mark as processed so user can retry
+  } finally {
+    pendingOrderInFlight.delete(ref);
+  }
+}
+
+/**
+ * Backend call: GET /account/orders/by-ref/:ref
+ */
+export async function fetchOrderByReferenceApi(
+  ref: string
+): Promise<any> {
+  const base = getBackendBase(); // includes /api
+  const url = `${base}/account/orders/by-ref/${encodeURIComponent(
+    ref
+  )}`;
+  const token =
+    typeof window !== "undefined"
+      ? window.localStorage.getItem("session_token") || ""
+      : "";
+
+  const res = await fetch(url, {
+    headers: {
+      Accept: "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    throw new Error(`Failed to fetch order ${ref}`);
+  }
+
+  return res.json();
+}

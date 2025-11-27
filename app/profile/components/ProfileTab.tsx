@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   updatePatientApi,
   changePasswordApi,
+  getLoggedInUserApi,
   type LoggedInUser,
 } from "@/lib/api";
 import { useAuth } from "@/components/auth/AuthProvider";
@@ -29,6 +30,8 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
 
   const [savingProfile, setSavingProfile] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  const [meFetched, setMeFetched] = useState(false);
 
   const [editForm, setEditForm] = useState({
     firstName: "",
@@ -50,30 +53,77 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
     confirmPassword: "",
   });
 
-  const isLoadingAuth = !initialized;
+  const isLoading = !initialized || loadingProfile;
 
-  // Sync edit form whenever user changes
+  /* ---------------------------------------------------------- */
+  /*          Fetch /users/me using new getLoggedInUserApi      */
+  /* ---------------------------------------------------------- */
+
+  useEffect(() => {
+    // Wait until auth is initialized
+    if (!initialized) return;
+
+    // No token → nothing to fetch
+    if (!token) {
+      setMeFetched(true);
+      return;
+    }
+
+    // Already fetched once in this session
+    if (meFetched) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setLoadingProfile(true);
+        const fresh = await getLoggedInUserApi();
+        if (cancelled) return;
+        // Normalize into LoggedInUser and push into auth context
+        setAuth(fresh as LoggedInUser, token);
+      } catch (err) {
+        console.error("Failed to load /users/me", err);
+      } finally {
+        if (!cancelled) {
+          setLoadingProfile(false);
+          setMeFetched(true);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialized, token, meFetched, setAuth]);
+
+  /* ---------------------------------------------------------- */
+  /*      Sync edit form whenever user in context changes       */
+  /* ---------------------------------------------------------- */
+
   useEffect(() => {
     if (!user) return;
+
+    const u = user as LoggedInUser;
+
     setEditForm({
-      firstName: user.firstName ?? "",
-      lastName: user.lastName ?? "",
-      gender: user.gender ?? "",
-      phone: user.phone ?? "",
-      dob: toDateInputValue(user.dob),
-      address_line1: user.address_line1 ?? "",
-      address_line2: user.address_line2 ?? "",
-      city: user.city ?? "",
-      county: user.county ?? "",
-      postalcode: user.postalcode ?? "",
-      country: user.country ?? "",
+      firstName: u.firstName ?? "",
+      lastName: u.lastName ?? "",
+      gender: u.gender ?? "",
+      phone: u.phone ?? "",
+      dob: toDateInputValue(u.dob),
+      address_line1: u.address_line1 ?? "",
+      address_line2: u.address_line2 ?? "",
+      city: u.city ?? "",
+      county: u.county ?? "",
+      postalcode: u.postalcode ?? "",
+      country: u.country ?? "",
     });
   }, [user]);
 
   const fullName =
-    user?.firstName || user?.lastName
-      ? `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim()
-      : "Your profile";
+    user && ("firstName" in user || "lastName" in user)
+      ? `${(user as any).firstName ?? ""} ${(user as any).lastName ?? ""}`.trim()
+      : (user as any)?.name || "Your profile";
 
   const handleEditChange = (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
@@ -111,15 +161,17 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
       };
 
       const id =
-        (user as any)._id ??
-        (user as any).id ??
-        (user as any).user_id;
+        (user as any)._id ?? (user as any).id ?? (user as any).user_id;
 
-      const updated = await updatePatientApi(id, payload);
+      const updated = await updatePatientApi(String(id), payload);
+
+      // Push updated user into auth context
       setAuth(updated as LoggedInUser, token);
+
       toast.success("Your details have been updated.");
       setEditing(false);
     } catch (err: any) {
+      console.error(err);
       toast.error(err?.message || "Failed to update profile.");
     } finally {
       setSavingProfile(false);
@@ -141,11 +193,9 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
     setChangingPassword(true);
     try {
       const id =
-        (user as any)._id ??
-        (user as any).id ??
-        (user as any).user_id;
+        (user as any)._id ?? (user as any).id ?? (user as any).user_id;
 
-      await changePasswordApi(id, {
+      await changePasswordApi(String(id), {
         currentPassword: passwordForm.currentPassword,
         newPassword: passwordForm.newPassword,
         confirmPassword: passwordForm.confirmPassword,
@@ -157,13 +207,18 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
         confirmPassword: "",
       });
     } catch (err: any) {
+      console.error(err);
       toast.error(err?.message || "Failed to change password.");
     } finally {
       setChangingPassword(false);
     }
   };
 
-  if (isLoadingAuth) {
+  /* ---------------------------------------------------------- */
+  /*                            UI                              */
+  /* ---------------------------------------------------------- */
+
+  if (isLoading) {
     return (
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-500">
         Loading your profile…
@@ -178,6 +233,8 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
       </div>
     );
   }
+
+  const u = user as LoggedInUser;
 
   return (
     <div className="space-y-4">
@@ -211,7 +268,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                 </p>
                 <p className="flex items-center gap-1.5 text-sm text-slate-900">
                   <Mail className="h-3.5 w-3.5 text-slate-400" />
-                  <span>{user.email || "Not set"}</span>
+                  <span>{u.email || "Not set"}</span>
                 </p>
               </div>
               <div className="space-y-1">
@@ -220,7 +277,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                 </p>
                 <p className="flex items-center gap-1.5 text-sm text-slate-900">
                   <Phone className="h-3.5 w-3.5 text-slate-400" />
-                  <span>{user.phone || "Not set"}</span>
+                  <span>{u.phone || "Not set"}</span>
                 </p>
               </div>
               <div className="space-y-1">
@@ -228,7 +285,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                   Gender
                 </p>
                 <p className="text-sm text-slate-900">
-                  {user.gender || "Not set"}
+                  {u.gender || "Not set"}
                 </p>
               </div>
               <div className="space-y-1">
@@ -237,7 +294,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                 </p>
                 <p className="flex items-center gap-1.5 text-sm text-slate-900">
                   <Calendar className="h-3.5 w-3.5 text-slate-400" />
-                  <span>{formatDate(user.dob)}</span>
+                  <span>{formatDate(u.dob)}</span>
                 </p>
               </div>
               <div className="space-y-1">
@@ -245,7 +302,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                   Joined
                 </p>
                 <p className="text-sm text-slate-900">
-                  {formatDate(user.createdAt)}
+                  {formatDate(u.createdAt)}
                 </p>
               </div>
             </div>
@@ -258,7 +315,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                 </p>
                 <p className="flex items-center gap-1.5 text-sm text-slate-900">
                   <MapPin className="h-3.5 w-3.5 text-slate-400" />
-                  <span>{user.address_line1 || "Not set"}</span>
+                  <span>{u.address_line1 || "Not set"}</span>
                 </p>
               </div>
               <div className="space-y-1">
@@ -266,7 +323,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                   Address line 2
                 </p>
                 <p className="text-sm text-slate-900">
-                  {user.address_line2 || "Not set"}
+                  {u.address_line2 || "Not set"}
                 </p>
               </div>
               <div className="space-y-1">
@@ -274,7 +331,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                   City
                 </p>
                 <p className="text-sm text-slate-900">
-                  {user.city || "Not set"}
+                  {u.city || "Not set"}
                 </p>
               </div>
               <div className="space-y-1">
@@ -282,7 +339,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                   County
                 </p>
                 <p className="text-sm text-slate-900">
-                  {user.county || "Not set"}
+                  {u.county || "Not set"}
                 </p>
               </div>
               <div className="space-y-1">
@@ -290,7 +347,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                   Postcode
                 </p>
                 <p className="text-sm text-slate-900">
-                  {user.postalcode || "Not set"}
+                  {u.postalcode || "Not set"}
                 </p>
               </div>
               <div className="space-y-1">
@@ -298,7 +355,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
                   Country
                 </p>
                 <p className="text-sm text-slate-900">
-                  {user.country || "Not set"}
+                  {u.country || "Not set"}
                 </p>
               </div>
             </div>
@@ -540,10 +597,7 @@ export default function ProfileTab({ editing, setEditing }: ProfileTabProps) {
         </div>
       </form>
 
-      <p className="mt-3 text-[11px] text-slate-500">
-        If any of your details are incorrect, please contact the pharmacy team
-        so we can update your records.
-      </p>
+
     </div>
   );
 }

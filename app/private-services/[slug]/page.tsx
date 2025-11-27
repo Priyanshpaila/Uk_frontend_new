@@ -154,6 +154,36 @@ function RichContent({ html }: { html: string }) {
           );
         }
 
+        // 🔧 NEW: paragraph that contains <img> → render as image block, not <p>
+        const hasImgTag = children.some(
+          (child) =>
+            child.type === "tag" && (child as HtmlElement).name === "img"
+        );
+        if (hasImgTag) {
+          const imgs = children.filter(
+            (child) =>
+              child.type === "tag" && (child as HtmlElement).name === "img"
+          ) as HtmlElement[];
+
+          return (
+            <div className="my-8 flex flex-col items-center gap-4">
+              {imgs.map((img, idx) => {
+                const src = img.attribs.src || "";
+                const alt = img.attribs.alt || "";
+                return (
+                  <figure key={idx} className="flex justify-center">
+                    <img
+                      src={src}
+                      alt={alt}
+                      className="max-h-80 w-auto max-w-full rounded-3xl border border-slate-200/70 bg-slate-50/60 p-2 shadow-soft-card object-contain"
+                    />
+                  </figure>
+                );
+              })}
+            </div>
+          );
+        }
+
         // Normal paragraph
         const childrenReact = domToReact(
           (el.children || []) as unknown as DOMNode[],
@@ -175,7 +205,7 @@ function RichContent({ html }: { html: string }) {
           <p
             className={[
               "mb-4 max-w-2xl text-sm md:text-base leading-relaxed text-slate-700",
-              "mx-auto", // keep content nicely centered in the page
+              "mx-auto",
               isCentered ? "text-center" : "text-left",
             ].join(" ")}
           >
@@ -255,7 +285,6 @@ function RichContent({ html }: { html: string }) {
           );
 
         case "a": {
-          // Inline links (inside normal text)
           const href = el.attribs.href || "#";
           const target = el.attribs.target;
           const rel = target === "_blank" ? "noopener noreferrer" : undefined;
@@ -273,6 +302,7 @@ function RichContent({ html }: { html: string }) {
         }
 
         case "img": {
+          // images that are *not* wrapped in a paragraph
           const src = el.attribs.src || "";
           const alt = el.attribs.alt || "";
           return (
@@ -290,7 +320,7 @@ function RichContent({ html }: { html: string }) {
           return <br />;
 
         default:
-          return; // let html-react-parser handle anything else
+          return;
       }
     },
   };
