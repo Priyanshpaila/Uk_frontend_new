@@ -17,7 +17,7 @@ const nextConfig = {
       // ⬇️ Live backend (uncomment / adjust protocol+host when you go live)
       {
         protocol: "http", // or "https" if your backend is on https
-        hostname: "*.backend.pharma-health.co.uk",
+        hostname: "backend.pharma-health.co.uk",
         port: "",
         pathname: "/upload/**",
       },
