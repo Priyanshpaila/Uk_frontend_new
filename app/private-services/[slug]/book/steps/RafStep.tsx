@@ -28,8 +28,14 @@ type QuestionType =
   | "boolean"
   | "select"
   | "multiselect"
+  | "radio"
   | "date"
-  | "file";
+  | "file"
+  // layout / non-answer elements:
+  | "static-text"
+  | "divider"
+  | "image"
+  | "page-break";
 
 type VisibilityCond = {
   field: string;
@@ -42,9 +48,12 @@ type VisibilityCond = {
 type Question = {
   id: string;
   key?: string;
+
   label: string;
   helpText?: string;
   type: QuestionType;
+
+  // input fields
   required?: boolean;
   placeholder?: string;
   min?: number;
@@ -52,6 +61,14 @@ type Question = {
   options?: { value: string; label: string }[];
   multiple?: boolean;
   accept?: string;
+  htmlInputType?: string; // e.g. "text" | "email" | "number"
+
+  // layout / content fields
+  isLayoutOnly?: boolean;
+  contentHtml?: string; // for text blocks
+  imageUrl?: string; // for image blocks
+
+  // grouping / logic
   sectionKey?: string;
   sectionTitle?: string;
   showIf?: VisibilityCond;
@@ -79,6 +96,8 @@ const slugify = (s: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/(^-|-$)/g, "");
 
+/* ---------------------- showIf normalisation ---------------------- */
+
 function extractShowIf(input: any): VisibilityCond | undefined {
   const cand =
     input?.showIf ??
@@ -93,6 +112,15 @@ function extractShowIf(input: any): VisibilityCond | undefined {
     input?.data?.condition;
 
   if (!cand || typeof cand !== "object") return undefined;
+
+  // honour enabled flag
+  if (
+    cand.enabled === false ||
+    cand.enabled === "false" ||
+    cand.enabled === 0
+  ) {
+    return undefined;
+  }
 
   const field =
     cand.field ??
@@ -114,12 +142,151 @@ function extractShowIf(input: any): VisibilityCond | undefined {
   const out: VisibilityCond = { field: String(field) };
   if (equals !== undefined) out.equals = equals;
   if (notEquals !== undefined) out.notEquals = notEquals;
-  if (inList !== undefined) out.in = Array.isArray(inList) ? inList : [inList];
+  if (inList !== undefined)
+    out.in = Array.isArray(inList) ? inList : [inList];
   if (truthy !== undefined) out.truthy = !!truthy;
   return out;
 }
 
-// Convert various schema shapes into our `Question[]`
+/* ---------------------- field-type mapping ------------------------ */
+
+function mapFieldType(
+  rawType: string,
+  wantsMulti: boolean,
+  input: any
+): {
+  mappedType: QuestionType;
+  htmlInputType?: string;
+  isLayoutOnly?: boolean;
+  contentHtml?: string;
+  imageUrl?: string;
+} {
+  const t = rawType.toLowerCase();
+  let htmlInputType: string | undefined;
+  let isLayoutOnly = false;
+  let contentHtml: string | undefined;
+  let imageUrl: string | undefined;
+
+  let mapped: QuestionType;
+
+  switch (t) {
+    case "divider":
+      mapped = "divider";
+      isLayoutOnly = true;
+      break;
+
+    case "image":
+      mapped = "image";
+      isLayoutOnly = true;
+      imageUrl =
+        input?.data?.url ??
+        input?.data?.src ??
+        input?.data?.imageUrl ??
+        input?.url ??
+        "";
+      break;
+
+    case "text_block":
+    case "text-block":
+    case "content":
+    case "html":
+    case "richtext":
+      mapped = "static-text";
+      isLayoutOnly = true;
+      contentHtml =
+        input?.data?.content ??
+        input?.data?.html ??
+        input?.data?.text ??
+        input?.content ??
+        "";
+      break;
+
+    case "page_break":
+    case "page-break":
+    case "pagebreak":
+      mapped = "page-break";
+      isLayoutOnly = true;
+      break;
+
+    case "boolean":
+    case "yesno":
+      mapped = "boolean";
+      break;
+
+    case "textarea":
+    case "text_area":
+      mapped = "textarea";
+      break;
+
+    case "number":
+    case "numeric":
+      mapped = "number";
+      htmlInputType = "number";
+      break;
+
+    case "date":
+    case "datepicker":
+      mapped = "date";
+      htmlInputType = "date";
+      break;
+
+    case "multiselect":
+    case "multi_select":
+    case "checkboxes":
+    case "checkbox_group":
+    case "checkbox-group":
+      mapped = "multiselect";
+      break;
+
+    case "select":
+    case "dropdown":
+      mapped = wantsMulti ? "multiselect" : "select";
+      break;
+
+    case "radio":
+      mapped = wantsMulti ? "multiselect" : "radio";
+      break;
+
+    case "file":
+    case "file_upload":
+    case "file-upload":
+      mapped = "file";
+      break;
+
+    case "email":
+      mapped = "text";
+      htmlInputType = "email";
+      break;
+
+    case "signature":
+      mapped = "text";
+      htmlInputType = "text";
+      break;
+
+    default:
+      mapped = "text";
+      break;
+  }
+
+  // Extra hint from builder: data.inputType
+  const dataInputType = input?.data?.inputType;
+  if (mapped === "text" && !htmlInputType && typeof dataInputType === "string") {
+    if (dataInputType === "email") htmlInputType = "email";
+    else if (dataInputType === "number") htmlInputType = "number";
+    else htmlInputType = dataInputType;
+  }
+
+  return {
+    mappedType: mapped,
+    htmlInputType,
+    isLayoutOnly,
+    contentHtml,
+    imageUrl,
+  };
+}
+
+/* -------------------- schema → Question[] ------------------------- */
+
 function toQuestionArray(input: any): Question[] {
   if (!input) return [];
 
@@ -131,198 +298,8 @@ function toQuestionArray(input: any): Question[] {
     }
   }
 
-  // Case A: [{ section, fields: [...] }]
-  if (Array.isArray(input) && input.every((sec) => Array.isArray((sec as any)?.fields))) {
-    const out: Question[] = [];
-    for (const sec of input as any[]) {
-      const secTitle = String(
-        sec.label ?? sec.title ?? sec.name ?? "Section",
-      );
-      const secKey = String(sec.key ?? sec.data?.key ?? slugify(secTitle));
-
-      for (const f of sec.fields || []) {
-        if (!f) continue;
-        const rawType = String(f.type || "").toLowerCase();
-
-        const mappedType: QuestionType =
-          rawType === "radio"
-            ? "select"
-            : rawType === "multiselect" ||
-              rawType === "multi_select" ||
-              rawType === "checkboxes"
-            ? "multiselect"
-            : rawType === "textarea" || rawType === "text_area"
-            ? "textarea"
-            : rawType === "date" || rawType === "datepicker"
-            ? "date"
-            : rawType === "number" || rawType === "numeric"
-            ? "number"
-            : rawType === "boolean" || rawType === "yesno"
-            ? "boolean"
-            : rawType === "file" || rawType === "file_upload"
-            ? "file"
-            : "text";
-
-        const opts = Array.isArray(f.options)
-          ? f.options.map((o: any) =>
-              typeof o === "string"
-                ? { value: o, label: o }
-                : {
-                    value: String(o.value ?? o.id ?? o),
-                    label: String(o.label ?? o.name ?? o),
-                  },
-            )
-          : Array.isArray(f.data?.options)
-          ? f.data.options.map((o: any) =>
-              typeof o === "string"
-                ? { value: o, label: o }
-                : {
-                    value: String(o.value ?? o.id ?? o),
-                    label: String(o.label ?? o.name ?? o),
-                  },
-            )
-          : undefined;
-
-        out.push({
-          id: String(f.id ?? f.key ?? `q_${out.length}`),
-          key: f.key ? String(f.key) : undefined,
-          label: String(
-            f.label ??
-              f.title ??
-              f.name ??
-              f.data?.label ??
-              "Question",
-          ),
-          helpText: f.helpText ?? f.help ?? f.data?.help ?? undefined,
-          type: mappedType,
-          required: Boolean(f.required ?? f.data?.required),
-          placeholder: f.placeholder ?? f.data?.placeholder ?? undefined,
-          min: typeof f.min === "number" ? f.min : undefined,
-          max: typeof f.max === "number" ? f.max : undefined,
-          options: opts,
-          multiple: Boolean(f.multiple ?? f.data?.multiple),
-          accept: String(
-            f.accept ?? f.data?.accept ?? "image/*,application/pdf",
-          ),
-          sectionKey: secKey,
-          sectionTitle: secTitle,
-          showIf: extractShowIf(f),
-        });
-      }
-    }
-    return out;
-  }
-
-  // Case B: simple array of questions (+ optional section entries)
-  if (Array.isArray(input)) {
-    const items: Question[] = [];
-    let curSectionKey: string | undefined;
-    let curSectionTitle: string | undefined;
-
-    input.forEach((x: any, i: number) => {
-      if (!x || typeof x !== "object") return;
-
-      const t = String(x.type ?? x.data?.type ?? "").toLowerCase();
-      if (t === "section") {
-        const title = String(
-          x.label ?? x.data?.label ?? x.title ?? "Section",
-        );
-        curSectionTitle = title;
-        curSectionKey = String(x.key ?? x.data?.key ?? slugify(title));
-        return;
-      }
-
-      if (Array.isArray(x.fields)) {
-        items.push(...toQuestionArray([x]));
-        return;
-      }
-
-      const rawType = String(x.type ?? x.data?.type ?? "").toLowerCase();
-      const wantsMulti = Boolean(x.multiple ?? x.data?.multiple);
-
-      const mappedType: QuestionType =
-        rawType === "boolean" || rawType === "yesno"
-          ? "boolean"
-          : rawType === "textarea" || rawType === "text_area"
-          ? "textarea"
-          : rawType === "number" || rawType === "numeric"
-          ? "number"
-          : rawType === "date" || rawType === "datepicker"
-          ? "date"
-          : rawType === "multiselect" ||
-            rawType === "multi_select" ||
-            rawType === "checkboxes"
-          ? "multiselect"
-          : rawType === "select" ||
-            rawType === "dropdown" ||
-            rawType === "radio"
-          ? wantsMulti
-            ? "multiselect"
-            : "select"
-          : rawType === "file" || rawType === "file_upload"
-          ? "file"
-          : "text";
-
-      const options = Array.isArray(x.options)
-        ? x.options.map((o: any) =>
-            typeof o === "string"
-              ? { value: o, label: o }
-              : {
-                  value: String(o.value ?? o.id ?? o),
-                  label: String(o.label ?? o.name ?? o),
-                },
-          )
-        : Array.isArray(x.data?.options)
-        ? x.data.options.map((o: any) =>
-            typeof o === "string"
-              ? { value: o, label: o }
-              : {
-                  value: String(o.value ?? o.id ?? o),
-                  label: String(o.label ?? o.name ?? o),
-                },
-          )
-        : undefined;
-
-      const label =
-        x.label ?? x.title ?? x.name ?? x.data?.label ?? `Question ${i + 1}`;
-      const id = String(x.id ?? x.key ?? x.data?.key ?? `q_${i}`);
-
-      const sKey = String(
-        x.section ?? x.data?.section ?? curSectionKey ?? "",
-      );
-      const sTitle = String(
-        x.sectionTitle ??
-          x.data?.sectionTitle ??
-          curSectionTitle ??
-          (sKey ? "Section" : ""),
-      );
-
-      items.push({
-        id,
-        key: x.key ? String(x.key) : undefined,
-        label: String(label),
-        helpText: x.helpText ?? x.help ?? x.data?.help ?? undefined,
-        type: mappedType,
-        required: Boolean(x.required ?? x.data?.required),
-        placeholder: x.placeholder ?? x.data?.placeholder ?? undefined,
-        min: typeof x.min === "number" ? x.min : undefined,
-        max: typeof x.max === "number" ? x.max : undefined,
-        options,
-        multiple: Boolean(x.multiple ?? x.data?.multiple),
-        accept: String(
-          x.accept ?? x.data?.accept ?? "image/*,application/pdf",
-        ),
-        sectionKey: sKey || undefined,
-        sectionTitle: sTitle || undefined,
-        showIf: extractShowIf(x),
-      });
-    });
-
-    return items;
-  }
-
-  // Case C: wrapper object { schema: [...] }
-  if (typeof input === "object") {
+  // Case A: wrapper object { schema: [...] }
+  if (!Array.isArray(input) && typeof input === "object") {
     const maybe =
       input.schema ??
       input.raf_schema ??
@@ -332,8 +309,113 @@ function toQuestionArray(input: any): Question[] {
     return toQuestionArray(maybe);
   }
 
+  // Case B: flat array (your current schema)
+  if (Array.isArray(input)) {
+    const items: Question[] = [];
+    let curSectionKey: string | undefined;
+    let curSectionTitle: string | undefined;
+
+    input.forEach((x: any, i: number) => {
+      if (!x || typeof x !== "object") return;
+
+      const t = String(x.type ?? x.data?.type ?? "").toLowerCase();
+
+      // Section element: grouping only, no actual question
+      if (t === "section") {
+        const title = String(
+          x.label ?? x.data?.label ?? x.title ?? "Section"
+        );
+        curSectionTitle = title;
+        curSectionKey = String(
+          x.key ?? x.data?.key ?? slugify(title)
+        );
+        return;
+      }
+
+      const rawType = String(x.type ?? x.data?.type ?? "").toLowerCase();
+      const wantsMulti = Boolean(x.multiple ?? x.data?.multiple);
+
+      const {
+        mappedType,
+        htmlInputType,
+        isLayoutOnly,
+        contentHtml,
+        imageUrl,
+      } = mapFieldType(rawType, wantsMulti, x);
+
+      const options = Array.isArray(x.options)
+        ? x.options.map((o: any) =>
+            typeof o === "string"
+              ? { value: o, label: o }
+              : {
+                  value: String(o.value ?? o.id ?? o),
+                  label: String(o.label ?? o.name ?? o),
+                }
+          )
+        : Array.isArray(x.data?.options)
+        ? x.data.options.map((o: any) =>
+            typeof o === "string"
+              ? { value: o, label: o }
+              : {
+                  value: String(o.value ?? o.id ?? o),
+                  label: String(o.label ?? o.name ?? o),
+                }
+          )
+        : undefined;
+
+      const label =
+        x.label ??
+        x.title ??
+        x.name ??
+        x.data?.label ??
+        (mappedType === "static-text" ? "" : `Question ${i + 1}`);
+
+      const id = String(x.id ?? x.key ?? x.data?.key ?? `q_${i}`);
+
+      const sKey = String(
+        x.section ?? x.data?.section ?? curSectionKey ?? ""
+      );
+      const sTitle = String(
+        x.sectionTitle ??
+          x.data?.sectionTitle ??
+          curSectionTitle ??
+          (sKey ? "Section" : "")
+      );
+
+      items.push({
+        id,
+        key: x.key ? String(x.key) : x.data?.key ? String(x.data.key) : undefined,
+        label: String(label),
+        helpText: x.helpText ?? x.help ?? x.data?.help ?? undefined,
+        type: mappedType,
+        required: isLayoutOnly
+          ? false
+          : Boolean(x.required ?? x.data?.required),
+        placeholder: x.placeholder ?? x.data?.placeholder ?? undefined,
+        min: typeof x.min === "number" ? x.min : undefined,
+        max: typeof x.max === "number" ? x.max : undefined,
+        options,
+        multiple: Boolean(x.multiple ?? x.data?.multiple),
+        accept: String(
+          x.accept ?? x.data?.accept ?? "image/*,application/pdf"
+        ),
+        sectionKey: sKey || undefined,
+        sectionTitle: sTitle || undefined,
+        showIf: extractShowIf(x),
+        htmlInputType,
+        isLayoutOnly,
+        contentHtml,
+        imageUrl,
+      });
+    });
+
+    return items;
+  }
+
   return [];
 }
+
+/* ------------------ localStorage helpers -------------------------- */
 
 const rafStorageKey = (slug: string) => `raf_answers.${slug}`;
 const legacyRafStorageKey = (slug: string) => `raf.answers.${slug}`;
@@ -363,7 +445,7 @@ function stashSessionId(id: number) {
 
 function getFirstSearchParamNumber(
   search: any,
-  names: string[],
+  names: string[]
 ): number | undefined {
   try {
     for (const k of names) {
@@ -387,7 +469,7 @@ function resolveInitialSessionId(search: any): number | undefined {
       getCookie("consultation_session_id") ||
         getCookie("pe_consultation_session_id") ||
         getCookie("pe.consultation_session_id") ||
-        getCookie("csid"),
+        getCookie("csid")
     );
     if (cookieId) return cookieId;
 
@@ -440,7 +522,7 @@ export default function RafStep() {
   const [fileStash, setFileStash] = useState<Record<string, File[]>>({});
 
   const [sessionId, setSessionId] = useState<number | undefined>(() =>
-    resolveInitialSessionId(search as any),
+    resolveInitialSessionId(search as any)
   );
 
   // keep URL session_id in sync if it changes later
@@ -556,14 +638,14 @@ export default function RafStep() {
             sessionId,
             count: Object.keys(answers || {}).length,
           },
-        }),
+        })
       );
     } catch {
       // ignore
     }
   }, [slug, answers, sessionId]);
 
-  // ---- visibility & progress ----------------------------------
+  /* -------------------- visibility & progress -------------------- */
 
   const idByKey = useMemo(() => {
     const m = new Map<string, string>();
@@ -579,39 +661,69 @@ export default function RafStep() {
     return byKey ? answers[byKey] : undefined;
   };
 
-  const normalizeCondVal = (v: any) => {
-    if (v === null || v === undefined) return v;
-    if (typeof v === "string") return v.trim().toLowerCase();
-    if (typeof v === "boolean" || typeof v === "number") return v;
-    if (typeof v === "object" && "value" in v)
-      return normalizeCondVal((v as any).value);
-    return v;
+  // loose comparison for showIf
+  const looseEqual = (a: any, b: any): boolean => {
+    const norm = (v: any) => {
+      if (typeof v === "string") {
+        const s = v.trim().toLowerCase();
+        if (["yes", "true", "y", "1"].includes(s)) return true;
+        if (["no", "false", "n", "0"].includes(s)) return false;
+        return s;
+      }
+      if (typeof v === "boolean") return v;
+      return v;
+    };
+
+    const va = norm(a);
+    const vb = norm(b);
+
+    if (typeof va === "boolean" || typeof vb === "boolean") {
+      return Boolean(va) === Boolean(vb);
+    }
+
+    return va === vb;
   };
 
   const isVisible = (q: Question): boolean => {
     const c = q.showIf;
     if (!c) return true;
-    const val = getAnswerByField(c.field);
-    if (c.truthy) return !!val;
-    if (c.in)
-      return c.in.map(normalizeCondVal).includes(normalizeCondVal(val));
-    if (c.equals !== undefined) {
-      const eq = normalizeCondVal(c.equals);
-      let v = normalizeCondVal(val);
-      if (eq === "yes")
-        return v === true || v === "yes" || v === "y" || v === "true";
-      if (eq === "no")
-        return v === false || v === "no" || v === "n" || v === "false";
-      return v === eq;
+
+    const rawVal = getAnswerByField(c.field);
+
+    // truthy condition
+    if (c.truthy) {
+      if (Array.isArray(rawVal)) return rawVal.length > 0;
+      return !!rawVal;
     }
-    if (c.notEquals !== undefined)
-      return normalizeCondVal(val) !== normalizeCondVal(c.notEquals);
-    return !!val;
+
+    // normalise to array for comparison
+    const values: any[] = Array.isArray(rawVal) ? rawVal : [rawVal];
+
+    // "in" condition
+    if (c.in && c.in.length > 0) {
+      return values.some((v) =>
+        c.in!.some((item) => looseEqual(v, item))
+      );
+    }
+
+    // "equals" condition
+    if (c.equals !== undefined) {
+      return values.some((v) => looseEqual(v, c.equals));
+    }
+
+    // "notEquals" condition
+    if (c.notEquals !== undefined) {
+      return !values.some((v) => looseEqual(v, c.notEquals));
+    }
+
+    // fallback: truthy
+    if (Array.isArray(rawVal)) return rawVal.length > 0;
+    return !!rawVal;
   };
 
   const visibleQuestions = useMemo(
     () => questions.filter((q) => isVisible(q)),
-    [questions, answers],
+    [questions, answers]
   );
 
   const SECTION_NONE = "__default__";
@@ -675,9 +787,9 @@ export default function RafStep() {
   const questionsInSection = useMemo(
     () =>
       visibleQuestions.filter(
-        (q) => (q.sectionKey ?? SECTION_NONE) === currentSectionKey,
+        (q) => (q.sectionKey ?? SECTION_NONE) === currentSectionKey
       ),
-    [visibleQuestions, currentSectionKey],
+    [visibleQuestions, currentSectionKey]
   );
 
   const isEmptyAnswer = (v: any) =>
@@ -689,22 +801,26 @@ export default function RafStep() {
   const requiredUnanswered = useMemo(
     () =>
       visibleQuestions.filter(
-        (q) => q.required && isEmptyAnswer(answers[q.id]),
+        (q) => q.required && !q.isLayoutOnly && isEmptyAnswer(answers[q.id])
       ),
-    [visibleQuestions, answers],
+    [visibleQuestions, answers]
   );
 
   const requiredUnansweredInSection = useMemo(
     () =>
       questionsInSection.filter(
-        (q) => q.required && isEmptyAnswer(answers[q.id]),
+        (q) =>
+          q.required && !q.isLayoutOnly && isEmptyAnswer(answers[q.id])
       ),
-    [questionsInSection, answers],
+    [questionsInSection, answers]
   );
 
   const totalRequired = useMemo(
-    () => visibleQuestions.filter((q) => q.required).length,
-    [visibleQuestions],
+    () =>
+      visibleQuestions.filter(
+        (q) => q.required && !q.isLayoutOnly
+      ).length,
+    [visibleQuestions]
   );
   const remainingRequired = requiredUnanswered.length;
   const answeredRequired = Math.max(totalRequired - remainingRequired, 0);
@@ -713,7 +829,7 @@ export default function RafStep() {
     : 100;
   const showProgressBar = !error && totalRequired > 0;
 
-  // ---- local actions ------------------------------------------
+  /* ------------------------ local actions ------------------------- */
 
   const onChange = (id: string, value: any) => {
     setAnswers((prev) => ({ ...prev, [id]: value }));
@@ -732,19 +848,19 @@ export default function RafStep() {
   const onBack = () => {
     router.push(
       `/private-services/${encodeURIComponent(
-        slug,
-      )}/book?step=${encodeURIComponent(prevStep)}`,
+        slug
+      )}/book?step=${encodeURIComponent(prevStep)}`
     );
   };
 
   async function uploadFilesForQuestion(
     qid: string,
-    files: File[],
+    files: File[]
   ): Promise<UploadedFile[]> {
     const out: UploadedFile[] = [];
     for (const f of files) {
       const res: IntakeUploadResult = await uploadRafFile(f, "raf").catch(
-        () => ({ ok: false }),
+        () => ({ ok: false })
       );
       if (res.ok) {
         out.push({
@@ -759,13 +875,15 @@ export default function RafStep() {
     return out;
   }
 
-  async function uploadPendingFiles(): Promise<Record<string, UploadedFile[]>> {
+  async function uploadPendingFiles(): Promise<
+    Record<string, UploadedFile[]>
+  > {
     const out: Record<string, UploadedFile[]> = {};
     const entries = Object.entries(fileStash || {});
     for (const [qid, files] of entries) {
       if (!files || files.length === 0) continue;
       const uploaded = await uploadFilesForQuestion(qid, files).catch(
-        () => [],
+        () => []
       );
       if (uploaded.length) out[qid] = uploaded;
     }
@@ -792,8 +910,7 @@ export default function RafStep() {
     }
 
     try {
-      const sid =
-        sessionId != null ? Number(sessionId) : undefined;
+      const sid = sessionId != null ? Number(sessionId) : undefined;
       if (sid && Number.isFinite(sid) && sid > 0) {
         // persist answers in backend
         await saveRafAnswersApi(sid, slug, answersToSend);
@@ -808,7 +925,7 @@ export default function RafStep() {
             sessionId: sid,
             answers: answersToSend,
             ts: Date.now(),
-          }),
+          })
         );
       } catch {}
 
@@ -824,7 +941,7 @@ export default function RafStep() {
         } catch {}
       }
       router.push(
-        `/private-services/${encodeURIComponent(slug)}/book?${qp.toString()}`,
+        `/private-services/${encodeURIComponent(slug)}/book?${qp.toString()}`
       );
     } catch (e: any) {
       setError(e?.message || "Failed to save answers.");
@@ -967,7 +1084,7 @@ export default function RafStep() {
                       type="button"
                       onClick={() =>
                         setSectionIdx((i) =>
-                          Math.min(sections.order.length - 1, i + 1),
+                          Math.min(sections.order.length - 1, i + 1)
                         )
                       }
                       disabled={sectionIdx >= sections.order.length - 1}
@@ -1004,34 +1121,12 @@ export default function RafStep() {
               </span>
               {requiredUnansweredInSection.length > 0 && (
                 <span className="text-[11px] text-amber-600">
-                  • {requiredUnansweredInSection.length} required in this section
-                  remaining
+                  • {requiredUnansweredInSection.length} required in this
+                  section remaining
                 </span>
               )}
             </div>
 
-            <div className="flex flex-1 flex-col items-stretch gap-3 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={onBack}
-                className="rounded-full border border-slate-200 px-5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Back
-              </button>
-
-              <button
-                type="button"
-                onClick={onContinue}
-                disabled={submitting || requiredUnanswered.length > 0}
-                className={`rounded-full px-6 py-2 text-sm font-semibold text-white shadow-sm transition ${
-                  submitting || requiredUnanswered.length > 0
-                    ? "bg-emerald-300 cursor-not-allowed"
-                    : "bg-emerald-600 hover:bg-emerald-700"
-                }`}
-              >
-                {submitting ? "Saving…" : "Continue"}
-              </button>
-            </div>
           </footer>
         </section>
       </main>
@@ -1059,6 +1154,83 @@ function QuestionField({
   const base =
     "block w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white";
 
+  /* ----- Layout-only elements (no answer) ----- */
+
+  if (q.type === "divider") {
+    return (
+      <div id={`q-${q.id}`} className="py-3">
+        <div className="border-t border-dashed border-slate-300" />
+      </div>
+    );
+  }
+
+  if (q.type === "static-text") {
+    return (
+      <div
+        id={`q-${q.id}`}
+        className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4"
+      >
+        {q.label && (
+          <p className="mb-1 text-sm font-semibold text-slate-900">
+            {q.label}
+          </p>
+        )}
+        {q.contentHtml ? (
+          <div
+            className="prose prose-sm max-w-none text-slate-700"
+            dangerouslySetInnerHTML={{ __html: q.contentHtml }}
+          />
+        ) : q.helpText ? (
+          <p className="text-xs text-slate-600">{q.helpText}</p>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (q.type === "image") {
+    const src = q.imageUrl || "";
+    return (
+      <div
+        id={`q-${q.id}`}
+        className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4"
+      >
+        {q.label && (
+          <p className="mb-2 text-sm font-medium text-slate-900">
+            {q.label}
+          </p>
+        )}
+        {src ? (
+          <img
+            src={src}
+            alt={q.label || "Image"}
+            className="max-h-64 w-auto rounded-xl border border-slate-200 bg-white object-contain"
+          />
+        ) : (
+          <p className="text-xs text-slate-500">
+            No image configured yet. You can add one in the form builder.
+          </p>
+        )}
+        {q.helpText && (
+          <p className="mt-2 text-[11px] text-slate-500">{q.helpText}</p>
+        )}
+      </div>
+    );
+  }
+
+  if (q.type === "page-break") {
+    return (
+      <div id={`q-${q.id}`} className="py-4">
+        <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.2em] text-slate-400">
+          <span className="flex-1 border-t border-dashed border-slate-300" />
+          <span>Page break</span>
+          <span className="flex-1 border-t border-dashed border-slate-300" />
+        </div>
+      </div>
+    );
+  }
+
+  /* ----- Answerable elements ----- */
+
   return (
     <div
       id={`q-${q.id}`}
@@ -1074,7 +1246,7 @@ function QuestionField({
 
       {q.type === "text" && (
         <input
-          type="text"
+          type={q.htmlInputType || "text"}
           className={base}
           placeholder={q.placeholder}
           value={value ?? ""}
@@ -1148,6 +1320,33 @@ function QuestionField({
             </option>
           ))}
         </select>
+      )}
+
+      {q.type === "radio" && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {(q.options || []).map((opt) => {
+            const checked = value === opt.value;
+            return (
+              <label
+                key={opt.value}
+                className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
+                  checked
+                    ? "border-emerald-400 bg-emerald-50"
+                    : "border-slate-200 bg-white"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name={q.id}
+                  className="h-4 w-4 border-slate-300 text-emerald-600"
+                  checked={checked}
+                  onChange={() => onChange(opt.value)}
+                />
+                <span>{opt.label}</span>
+              </label>
+            );
+          })}
+        </div>
       )}
 
       {q.type === "multiselect" && (
