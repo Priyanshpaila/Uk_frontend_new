@@ -143,8 +143,7 @@ function extractShowIf(input: any): VisibilityCond | undefined {
   const out: VisibilityCond = { field: String(field) };
   if (equals !== undefined) out.equals = equals;
   if (notEquals !== undefined) out.notEquals = notEquals;
-  if (inList !== undefined)
-    out.in = Array.isArray(inList) ? inList : [inList];
+  if (inList !== undefined) out.in = Array.isArray(inList) ? inList : [inList];
   if (truthy !== undefined) out.truthy = !!truthy;
   return out;
 }
@@ -271,7 +270,11 @@ function mapFieldType(
 
   // Extra hint from builder: data.inputType
   const dataInputType = input?.data?.inputType;
-  if (mapped === "text" && !htmlInputType && typeof dataInputType === "string") {
+  if (
+    mapped === "text" &&
+    !htmlInputType &&
+    typeof dataInputType === "string"
+  ) {
     if (dataInputType === "email") htmlInputType = "email";
     else if (dataInputType === "number") htmlInputType = "number";
     else htmlInputType = dataInputType;
@@ -323,26 +326,17 @@ function toQuestionArray(input: any): Question[] {
 
       // Section element: grouping only, no actual question
       if (t === "section") {
-        const title = String(
-          x.label ?? x.data?.label ?? x.title ?? "Section"
-        );
+        const title = String(x.label ?? x.data?.label ?? x.title ?? "Section");
         curSectionTitle = title;
-        curSectionKey = String(
-          x.key ?? x.data?.key ?? slugify(title)
-        );
+        curSectionKey = String(x.key ?? x.data?.key ?? slugify(title));
         return;
       }
 
       const rawType = String(x.type ?? x.data?.type ?? "").toLowerCase();
       const wantsMulti = Boolean(x.multiple ?? x.data?.multiple);
 
-      const {
-        mappedType,
-        htmlInputType,
-        isLayoutOnly,
-        contentHtml,
-        imageUrl,
-      } = mapFieldType(rawType, wantsMulti, x);
+      const { mappedType, htmlInputType, isLayoutOnly, contentHtml, imageUrl } =
+        mapFieldType(rawType, wantsMulti, x);
 
       const options = Array.isArray(x.options)
         ? x.options.map((o: any) =>
@@ -373,9 +367,7 @@ function toQuestionArray(input: any): Question[] {
 
       const id = String(x.id ?? x.key ?? x.data?.key ?? `q_${i}`);
 
-      const sKey = String(
-        x.section ?? x.data?.section ?? curSectionKey ?? ""
-      );
+      const sKey = String(x.section ?? x.data?.section ?? curSectionKey ?? "");
       const sTitle = String(
         x.sectionTitle ??
           x.data?.sectionTitle ??
@@ -385,7 +377,11 @@ function toQuestionArray(input: any): Question[] {
 
       items.push({
         id,
-        key: x.key ? String(x.key) : x.data?.key ? String(x.data.key) : undefined,
+        key: x.key
+          ? String(x.key)
+          : x.data?.key
+          ? String(x.data.key)
+          : undefined,
         label: String(label),
         helpText: x.helpText ?? x.help ?? x.data?.help ?? undefined,
         type: mappedType,
@@ -397,9 +393,7 @@ function toQuestionArray(input: any): Question[] {
         max: typeof x.max === "number" ? x.max : undefined,
         options,
         multiple: Boolean(x.multiple ?? x.data?.multiple),
-        accept: String(
-          x.accept ?? x.data?.accept ?? "image/*,application/pdf"
-        ),
+        accept: String(x.accept ?? x.data?.accept ?? "image/*,application/pdf"),
         sectionKey: sKey || undefined,
         sectionTitle: sTitle || undefined,
         showIf: extractShowIf(x),
@@ -421,6 +415,7 @@ function toQuestionArray(input: any): Question[] {
 const rafStorageKey = (slug: string) => `raf_answers.${slug}`;
 const legacyRafStorageKey = (slug: string) => `raf.answers.${slug}`;
 const rafSectionKey = (slug: string) => `raf_section.${slug}`;
+const rafFormIdKey = (slug: string) => `raf_form_id.${slug}`;
 
 function getCookie(name: string): string | undefined {
   try {
@@ -616,6 +611,36 @@ export default function RafStep() {
 
         const list = toQuestionArray(result.schema);
         setQuestions(list);
+
+        // 🔥 NEW: store label map + form id in localStorage
+        try {
+          const labelMap: Record<string, { label: string; key: string }> = {};
+
+          for (const q of list) {
+            if (q.isLayoutOnly) continue; // ignore dividers, static text, etc.
+            const fieldKey = q.id; // this is the key we use in answers object
+            labelMap[fieldKey] = {
+              label: q.label,
+              key: q.key ?? q.id, // builder key if present, else id
+            };
+          }
+
+          // Labels map – used later when building formsQA.raf.qa
+          localStorage.setItem(`raf_labels.${slug}`, JSON.stringify(labelMap));
+
+          // (optional but useful) Save form meta including form_id
+          const formMeta = {
+            formId: result._id,
+            serviceId: result.service_id ?? null,
+            slug,
+            name: result.name ?? null,
+            description: result.description ?? null,
+          };
+
+          localStorage.setItem(`raf_form.${slug}`, JSON.stringify(formMeta));
+        } catch {
+          // ignore storage errors
+        }
       } catch (e: any) {
         setError(e?.message || "Failed to load questions.");
         setQuestions([]);
@@ -709,9 +734,7 @@ export default function RafStep() {
 
     // "in" condition
     if (c.in && c.in.length > 0) {
-      return values.some((v) =>
-        c.in!.some((item) => looseEqual(v, item))
-      );
+      return values.some((v) => c.in!.some((item) => looseEqual(v, item)));
     }
 
     // "equals" condition
@@ -744,8 +767,7 @@ export default function RafStep() {
       if (!meta.has(key)) {
         meta.set(key, {
           title:
-            q.sectionTitle ??
-            (key === SECTION_NONE ? "General" : "Section"),
+            q.sectionTitle ?? (key === SECTION_NONE ? "General" : "Section"),
         });
         order.push(key);
       }
@@ -817,17 +839,13 @@ export default function RafStep() {
   const requiredUnansweredInSection = useMemo(
     () =>
       questionsInSection.filter(
-        (q) =>
-          q.required && !q.isLayoutOnly && isEmptyAnswer(answers[q.id])
+        (q) => q.required && !q.isLayoutOnly && isEmptyAnswer(answers[q.id])
       ),
     [questionsInSection, answers]
   );
 
   const totalRequired = useMemo(
-    () =>
-      visibleQuestions.filter(
-        (q) => q.required && !q.isLayoutOnly
-      ).length,
+    () => visibleQuestions.filter((q) => q.required && !q.isLayoutOnly).length,
     [visibleQuestions]
   );
   const remainingRequired = requiredUnanswered.length;
@@ -883,16 +901,12 @@ export default function RafStep() {
     return out;
   }
 
-  async function uploadPendingFiles(): Promise<
-    Record<string, UploadedFile[]>
-  > {
+  async function uploadPendingFiles(): Promise<Record<string, UploadedFile[]>> {
     const out: Record<string, UploadedFile[]> = {};
     const entries = Object.entries(fileStash || {});
     for (const [qid, files] of entries) {
       if (!files || files.length === 0) continue;
-      const uploaded = await uploadFilesForQuestion(qid, files).catch(
-        () => []
-      );
+      const uploaded = await uploadFilesForQuestion(qid, files).catch(() => []);
       if (uploaded.length) out[qid] = uploaded;
     }
     return out;
@@ -1040,8 +1054,8 @@ export default function RafStep() {
               Risk assessment
             </h1>
             <p className="text-sm text-slate-600">
-              Please answer these questions so our clinicians can safely
-              assess your suitability for this treatment.
+              Please answer these questions so our clinicians can safely assess
+              your suitability for this treatment.
             </p>
           </header>
 
@@ -1065,8 +1079,8 @@ export default function RafStep() {
 
           {!loading && !error && questions.length === 0 && (
             <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-6 text-sm text-slate-600">
-              There are no medical questions configured for this service
-              yet. You can continue to the next step.
+              There are no medical questions configured for this service yet.
+              You can continue to the next step.
             </div>
           )}
 
@@ -1085,9 +1099,7 @@ export default function RafStep() {
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={() =>
-                        setSectionIdx((i) => Math.max(0, i - 1))
-                      }
+                      onClick={() => setSectionIdx((i) => Math.max(0, i - 1))}
                       disabled={sectionIdx === 0}
                       className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"
                     >
@@ -1198,9 +1210,7 @@ function QuestionField({
         className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4"
       >
         {q.label && (
-          <p className="mb-1 text-sm font-semibold text-slate-900">
-            {q.label}
-          </p>
+          <p className="mb-1 text-sm font-semibold text-slate-900">{q.label}</p>
         )}
         {q.contentHtml ? (
           <div
@@ -1222,9 +1232,7 @@ function QuestionField({
         className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4"
       >
         {q.label && (
-          <p className="mb-2 text-sm font-medium text-slate-900">
-            {q.label}
-          </p>
+          <p className="mb-2 text-sm font-medium text-slate-900">{q.label}</p>
         )}
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
@@ -1265,8 +1273,7 @@ function QuestionField({
       className="rounded-2xl border border-slate-200 bg-slate-50/60 p-4"
     >
       <label className="mb-1 block text-sm font-medium text-slate-900">
-        {q.label}{" "}
-        {q.required && <span className="text-rose-600">*</span>}
+        {q.label} {q.required && <span className="text-rose-600">*</span>}
       </label>
       {q.helpText && (
         <p className="mb-2 text-xs text-slate-600">{q.helpText}</p>
@@ -1312,9 +1319,7 @@ function QuestionField({
             type="button"
             onClick={() => onChange(true)}
             className={`rounded-full px-3 py-1 font-medium ${
-              value === true
-                ? "bg-emerald-600 text-white"
-                : "text-slate-700"
+              value === true ? "bg-emerald-600 text-white" : "text-slate-700"
             }`}
           >
             Yes
@@ -1323,9 +1328,7 @@ function QuestionField({
             type="button"
             onClick={() => onChange(false)}
             className={`rounded-full px-3 py-1 font-medium ${
-              value === false
-                ? "bg-emerald-600 text-white"
-                : "text-slate-700"
+              value === false ? "bg-emerald-600 text-white" : "text-slate-700"
             }`}
           >
             No

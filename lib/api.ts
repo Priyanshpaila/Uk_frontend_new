@@ -1352,19 +1352,47 @@ export function readRafAnswersFromStorage(
 export function buildRafQAFromStorage(slug: string): any[] {
   const answers = readRafAnswersFromStorage(slug);
   if (!answers) return [];
+
+  // 🔥 Try to read label map written by RafStep
+  let labelMap: Record<
+    string,
+    { label?: string; key?: string }
+  > | null = null;
+
+  if (typeof window !== "undefined") {
+    try {
+      const raw = window.localStorage.getItem(`raf_labels.${slug}`);
+      if (raw) {
+        labelMap = JSON.parse(raw);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const out: any[] = [];
-  Object.entries(answers).forEach(([key, value]) => {
+
+  Object.entries(answers).forEach(([fieldKey, value]) => {
     if (value === undefined || value === null || value === "") return;
-    const answer = Array.isArray(value) ? value.join(", ") : String(value);
+
+    const meta = labelMap?.[fieldKey] ?? null;
+    const friendlyKey = meta?.key || fieldKey;
+    const questionLabel = meta?.label || fieldKey; // fallback if no labels stored
+
+    const answer =
+      Array.isArray(value) ? value.map((v) => String(v)).join(", ") : String(value);
+
     out.push({
-      key,
-      question: key,
+      key: friendlyKey,      // e.g. "meds_current"
+      question: questionLabel, // e.g. "Are you on any current medications?"
       answer,
       raw: value,
     });
   });
+
   return out;
 }
+
 
 export function resolveUserIdFromStorage(
   currentUser?: { _id?: string } | null

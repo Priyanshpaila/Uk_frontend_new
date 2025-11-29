@@ -18,6 +18,7 @@ import {
   updateOrderApi,          // ✅ NEW
   resolveUserIdFromStorage,
   type CreateAppointmentPayload,
+  buildRafQAFromStorage,
 } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
@@ -104,6 +105,21 @@ function readIdFromLocal(keys: string[]): string | null {
   return null;
 }
 
+function readRafFormId(slug: string): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const key = `raf_form_id.${slug}`;
+    const v = localStorage.getItem(key);
+    if (v && v !== "undefined" && v !== "null") {
+      return v;
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+
 function readRafAnswers(slug: string): Record<string, any> | null {
   if (typeof window === "undefined") return null;
   try {
@@ -131,17 +147,6 @@ function formatAnswer(v: any): string {
     return JSON.stringify(v);
   }
   return String(v);
-}
-
-function buildRafQA(slug: string): any[] {
-  const answers = readRafAnswers(slug);
-  if (!answers) return [];
-  return Object.entries(answers).map(([key, raw], index) => ({
-    key,
-    question: `Question ${index + 1}`,
-    answer: formatAnswer(raw),
-    raw,
-  }));
 }
 
 function buildOrderMeta(opts: {
@@ -194,7 +199,10 @@ function buildOrderMeta(opts: {
   );
 
   const sessionId = getConsultationSessionId();
-  const rafQA = buildRafQA(opts.serviceSlug);
+const rafQA = buildRafQAFromStorage(opts.serviceSlug);
+
+  // ✅ get RAF form id that we stored in RAF step
+  const rafFormId = readRafFormId(opts.serviceSlug);
 
   const meta: any = {
     type: "new",
@@ -208,7 +216,7 @@ function buildOrderMeta(opts: {
     payment_status: "pending",
     formsQA: {
       raf: {
-        form_id: null,
+        form_id: rafFormId || null,   // ✅ now sending the form id
         schema_version: null,
         qa: rafQA,
       },
@@ -229,6 +237,7 @@ function buildOrderMeta(opts: {
 
   return meta;
 }
+
 
 /* ------------------------------------------------------------------ */
 /* Calendar component                                                 */
