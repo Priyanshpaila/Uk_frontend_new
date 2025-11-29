@@ -542,6 +542,27 @@ export async function createOrderApi(
   });
 }
 
+/**
+ * PUT /orders/:id
+ * (same shape as create, but all fields optional so you can just send what you want to change)
+ */
+export type UpdateOrderPayload = Partial<CreateOrderPayload> & {
+  status?: string;
+  appointment_status?: string;
+  is_appointment_booked?: boolean;
+};
+
+export async function updateOrderApi(
+  orderId: string,
+  payload: UpdateOrderPayload
+): Promise<OrderDto> {
+  const base = getBackendBase();
+  return jsonFetch<OrderDto>(`${base}/orders/${orderId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 /* ------------------------------------------------------------------ */
 /*                               PAGES                                */
 /* ------------------------------------------------------------------ */
@@ -696,20 +717,41 @@ export async function fetchServiceBySlug(
 /*                        SERVICE MEDICINES APIs                      */
 /* ------------------------------------------------------------------ */
 
+// lib/api.ts  (service medicines section)
+
+// Variation as it comes from backend
+export type MedicineVariationDto = {
+  title: string;
+  price: number;      // assumed in major units (e.g. 12.5 => £12.50)
+  stock: number;
+  min_qty?: number;
+  max_qty?: number;
+  sort_order?: number;
+  status?: string;    // "published" | "draft" | "active" etc.
+};
+
 export type ServiceMedicineDto = {
   _id: string;
   sku: string;
   name: string;
-  variations?: string | string[];
-  strength?: string;
-  qty: number;
+  slug?: string;
+  description?: string;
+  image?: string;
+  status?: string | null;           // "published", "draft", etc.
+  price_from?: number;              // lowest variation price
+  max_bookable_quantity?: number;
+  allow_reorder?: boolean;
+  is_virtual?: boolean;
+
+  // NEW: array of variation objects (preferred)
+  variations?: MedicineVariationDto[];
+
+  // Legacy / optional fields kept for safety
+  qty?: number;
   unitMinor?: number;
   totalMinor?: number;
+  strength?: string;
   variation?: string;
-  price?: number;
-  image?: string;
-  description?: string;
-  status?: string | null;
   min?: number;
   max?: number;
   min_qty?: number;
@@ -749,6 +791,7 @@ export function buildMediaUrl(imagePath?: string | null): string {
   return `${origin}/${imagePath}`;
 }
 
+
 /* ------------------------------------------------------------------ */
 /*                            RAF / Clinic Forms                      */
 /* ------------------------------------------------------------------ */
@@ -786,11 +829,12 @@ export async function fetchClinicForms(): Promise<ClinicFormDto[]> {
  * Convenience helper:
  *  - finds the active RAF form for a service (by slug or serviceId)
  *  - then loads the full form by id to get the schema
+ *  - returns a normalised ClinicFormDto (compatible with ApiClinicForm)
  */
 export async function fetchRafFormForService(
   serviceSlug: string,
   serviceId?: string | null
-): Promise<{ form: ClinicFormDto; schema: any } | null> {
+): Promise<ClinicFormDto | null> {
   const base = getBackendBase();
 
   const forms = await fetchClinicForms();
@@ -815,11 +859,17 @@ export async function fetchRafFormForService(
     }
   );
 
-  const schema =
+  // Normalise schema so callers can always use `form.schema`
+  const bestSchema =
     detail.schema ?? detail.raf_schema ?? detail.questions ?? null;
 
-  return { form: detail, schema };
+  return {
+    ...detail,
+    schema: bestSchema,
+  };
 }
+
+
 
 /* ------------------------------------------------------------------ */
 /*                  Consultation session + RAF answers                */
@@ -1004,6 +1054,9 @@ export function formatYmdForDisplay(
 /**
  * Fetch schedules and pick one matching a service slug
  */
+/**
+ * Fetch schedules and pick one matching a service slug
+ */
 export async function fetchScheduleForServiceSlug(
   serviceSlug: string
 ): Promise<Schedule> {
@@ -1023,11 +1076,17 @@ export async function fetchScheduleForServiceSlug(
     throw new Error("No schedule configured for this service yet.");
   }
 
-  // Persist schedule_id so other flows (order creation) can reuse it
+  // Persist schedule_id + service_id so other flows (order / appointment) can reuse them
   try {
-    if (typeof window !== "undefined" && match._id) {
-      window.localStorage.setItem("schedule_id", match._id);
-      window.sessionStorage.setItem("schedule_id", match._id);
+    if (typeof window !== "undefined") {
+      if (match._id) {
+        window.localStorage.setItem("schedule_id", match._id);
+        window.sessionStorage.setItem("schedule_id", match._id);
+      }
+      if (match.service_id) {
+        window.localStorage.setItem("service_id", String(match.service_id));
+        window.sessionStorage.setItem("service_id", String(match.service_id));
+      }
     }
   } catch {
     // ignore storage issues
@@ -1035,6 +1094,7 @@ export async function fetchScheduleForServiceSlug(
 
   return match;
 }
+
 
 // ---- Slot building logic (pure) ----
 
@@ -1223,6 +1283,7 @@ export function getStoredUserFromStorage(): StoredUser | null {
   try {
     const raw =
       window.localStorage.getItem("user") ||
+      window.localStorage.getItem("pharmacy_user") ||
       window.localStorage.getItem("user_data") ||
       window.localStorage.getItem("pe_user") ||
       window.localStorage.getItem("pe.user");
@@ -1233,6 +1294,17 @@ export function getStoredUserFromStorage(): StoredUser | null {
   }
 }
 
+export function getServiceIdFromStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw =
+      window.localStorage.getItem("service_id") ||
+      window.sessionStorage.getItem("service_id");
+    return raw ? String(raw) : null;
+  } catch {
+    return null;
+  }
+}
 export function getConsultationSessionIdFromStorage(): number | null {
   if (typeof window === "undefined") return null;
   try {
@@ -1340,7 +1412,8 @@ export type LastPaymentItem = {
 
 export type LastPaymentPayload = {
   ref: string;
-  amountMinor: number;
+  amountMinor: number;   // canonical field
+  totalMinor?: number;   // alias for convenience
   ts: number;
   slug: string;
   appointment_at: string | null;
@@ -1553,8 +1626,7 @@ export function buildLastPaymentPayload(
         : "";
     const s2 =
       typeof window !== "undefined"
-        ? window.sessionStorage.getItem("consultation_session_id") ||
-          ""
+        ? window.sessionStorage.getItem("consultation_session_id") || ""
         : "";
     sessionId = (s1 || s2 || "").trim() || undefined;
   } catch {
@@ -1571,6 +1643,7 @@ export function buildLastPaymentPayload(
     items: mapped,
   };
 }
+
 
 export function persistLastPayment(payload: LastPaymentPayload) {
   try {
@@ -1812,4 +1885,70 @@ export async function fetchOrderByReferenceApi(
   }
 
   return res.json();
+}
+
+/**
+ * PATCH /orders/:id
+ * Convenience helper to mark an order as paid (or update payment_status).
+ * Adjust the URL/method/body if your backend uses a different route.
+ */
+export async function markOrderPaidApi(
+  orderId: string,
+  payload?: { payment_status?: string; [key: string]: any }
+): Promise<OrderDto> {
+  const base = getBackendBase();
+
+  const body = {
+    payment_status: "paid",
+    ...(payload || {}),
+  };
+
+  return jsonFetch<OrderDto>(`${base}/orders/${encodeURIComponent(orderId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*                             APPOINTMENTS                           */
+/* ------------------------------------------------------------------ */
+
+export type CreateAppointmentPayload = {
+  order_id: string;
+  user_id: string;
+  service_id: string;
+  schedule_id: string;
+  start_at: string; // ISO string: "2025-11-26T14:30:00.000Z"
+  end_at: string;   // ISO string
+  join_url?: string; // optional – can be provided or generated server-side
+  host_url?: string; // optional
+};
+
+export type AppointmentDto = {
+  _id: string;
+  order_id: string;
+  user_id: string;
+  service_id: string;
+  schedule_id: string;
+  start_at: string;
+  end_at: string;
+  join_url?: string;
+  host_url?: string;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  [key: string]: any;
+};
+
+/**
+ * POST /appointments
+ */
+export async function createAppointmentApi(
+  payload: CreateAppointmentPayload
+): Promise<AppointmentDto> {
+  const base = getBackendBase();
+  return jsonFetch<AppointmentDto>(`${base}/appointments`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

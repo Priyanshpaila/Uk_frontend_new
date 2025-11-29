@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { useCart } from "@/components/cart/cart-context";
+import { useCart, type CartItem } from "@/components/cart/cart-context";
 import {
   fetchScheduleForServiceSlug,
   buildSlotsForDate,
@@ -12,34 +12,238 @@ import {
   type Schedule,
   type Slot,
   type DayMeta,
-  getLoggedInUserApi,
-  type LoggedInUser,
-  buildRafQAFromStorage,
-  getConsultationSessionIdFromStorage,
-  resolveUserIdFromStorage,
-  getStoredUserFromStorage,
   persistAppointmentSelection,
+  createAppointmentApi,
   createOrderApi,
-  type CreateOrderPayload,
+  updateOrderApi,          // ✅ NEW
+  resolveUserIdFromStorage,
+  type CreateAppointmentPayload,
 } from "@/lib/api";
 
-function generateReference(): string {
-  const now = new Date();
-  const random = Math.random().toString(36).slice(2, 8).toUpperCase();
-  return `ORD-${now.getFullYear()}-${random}`;
+/* ------------------------------------------------------------------ */
+/* Helpers to read ids + session + RAF answers + build order meta     */
+/* ------------------------------------------------------------------ */
+
+function resolveServiceId(
+  schedule: Schedule | null,
+  cartItems: CartItem[]
+): string | null {
+  if (!schedule) return null;
+
+  const sch: any = schedule;
+
+  // Try different common shapes
+  const fromSchedule =
+    sch.service_id || // plain field
+    sch.serviceId ||
+    (sch.service && (sch.service._id || sch.service.id)) ||
+    sch.service || // sometimes raw id
+    null;
+
+  if (fromSchedule) return String(fromSchedule);
+
+  // Fallback: see if any cart item has service_id linked
+  for (const ci of cartItems as any[]) {
+    const cid =
+      ci.service_id ||
+      ci.serviceId ||
+      (ci.service && (ci.service._id || ci.service.id)) ||
+      null;
+    if (cid) return String(cid);
+  }
+
+  return null;
 }
+
+function readCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const pairs = document.cookie.split("; ");
+  for (const pair of pairs) {
+    const eq = pair.indexOf("=");
+    if (eq === -1) continue;
+    const key = decodeURIComponent(pair.slice(0, eq));
+    if (key === name) {
+      return decodeURIComponent(pair.slice(eq + 1));
+    }
+  }
+  return null;
+}
+
+function getConsultationSessionId(): number | null {
+  if (typeof window === "undefined") return null;
+  const keys = [
+    "consultation_session_id",
+    "pe_consultation_session_id",
+    "consultationSessionId",
+  ];
+  for (const k of keys) {
+    try {
+      const raw =
+        localStorage.getItem(k) ||
+        sessionStorage.getItem(k) ||
+        readCookie(k) ||
+        null;
+      const n = raw ? Number(raw) : NaN;
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch {}
+  }
+  return null;
+}
+
+/** Read an ID from localStorage using a list of possible keys */
+function readIdFromLocal(keys: string[]): string | null {
+  if (typeof window === "undefined") return null;
+  for (const key of keys) {
+    try {
+      const v = window.localStorage.getItem(key);
+      if (v && v !== "undefined" && v !== "null") {
+        return v;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+function readRafAnswers(slug: string): Record<string, any> | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const keys = [
+      `raf_answers.${slug}`,
+      `raf.answers.${slug}`,
+      `assessment.answers.${slug}`,
+    ];
+    for (const k of keys) {
+      const raw = localStorage.getItem(k);
+      if (raw) {
+        return JSON.parse(raw);
+      }
+    }
+  } catch {}
+  return null;
+}
+
+function formatAnswer(v: any): string {
+  if (v === null || v === undefined) return "";
+  if (Array.isArray(v)) return v.map(formatAnswer).join(", ");
+  if (typeof v === "object") {
+    if ("label" in v) return String((v as any).label);
+    if ("value" in v) return String((v as any).value);
+    return JSON.stringify(v);
+  }
+  return String(v);
+}
+
+function buildRafQA(slug: string): any[] {
+  const answers = readRafAnswers(slug);
+  if (!answers) return [];
+  return Object.entries(answers).map(([key, raw], index) => ({
+    key,
+    question: `Question ${index + 1}`,
+    answer: formatAnswer(raw),
+    raw,
+  }));
+}
+
+function buildOrderMeta(opts: {
+  cartItems: any[];
+  serviceSlug: string;
+  serviceName?: string;
+  appointmentIso: string;
+}) {
+  const items = (opts.cartItems || []).map((ci: any) => {
+    const unitMinor =
+      typeof ci.unitMinor === "number"
+        ? ci.unitMinor
+        : ci.price
+        ? Math.round(Number(ci.price) * 100)
+        : 0;
+    const qty = Number(ci.qty || 1);
+    const totalMinor =
+      typeof ci.totalMinor === "number" ? ci.totalMinor : unitMinor * qty;
+
+    const variation =
+      ci.variation ||
+      ci.variations ||
+      ci.optionLabel ||
+      ci.selectedLabel ||
+      ci.label ||
+      "";
+
+    return {
+      sku: ci.sku,
+      name: ci.name,
+      variations: variation || null,
+      strength: ci.strength ?? null,
+      qty,
+      unitMinor,
+      totalMinor,
+      variation: variation || null,
+    };
+  });
+
+  const lines = items.map((it: any, index: number) => ({
+    index,
+    name: it.name,
+    qty: it.qty,
+    variation: it.variation || it.variations || "",
+  }));
+
+  const totalMinor = items.reduce(
+    (sum: number, it: any) => sum + (it.totalMinor || 0),
+    0
+  );
+
+  const sessionId = getConsultationSessionId();
+  const rafQA = buildRafQA(opts.serviceSlug);
+
+  const meta: any = {
+    type: "new",
+    lines,
+    items,
+    totalMinor,
+    service_slug: opts.serviceSlug,
+    service: opts.serviceName || opts.serviceSlug,
+    appointment_start_at: opts.appointmentIso,
+    consultation_session_id: sessionId ?? undefined,
+    payment_status: "pending",
+    formsQA: {
+      raf: {
+        form_id: null,
+        schema_version: null,
+        qa: rafQA,
+      },
+    },
+  };
+
+  if (items[0]) {
+    const first = items[0];
+    meta.selectedProduct = {
+      name: first.name,
+      variation: first.variation || first.variations || null,
+      strength: first.strength || first.variation || null,
+      qty: first.qty,
+      unitMinor: first.unitMinor,
+      totalMinor: first.totalMinor,
+    };
+  }
+
+  return meta;
+}
+
+/* ------------------------------------------------------------------ */
+/* Calendar component                                                 */
+/* ------------------------------------------------------------------ */
 
 export default function CalendarBookingPage() {
   const params = useParams<{ slug: string }>();
   const slug = params?.slug ?? "";
 
   const router = useRouter();
-  const cart = useCart() as any;
-
-  const cartItems: any[] = Array.isArray(cart?.items)
-    ? cart.items
-    : Array.isArray(cart?.state?.items)
-    ? cart.state.items
+  const cart = useCart();
+  const cartItems: CartItem[] = Array.isArray((cart as any)?.items)
+    ? (cart as any).items
+    : Array.isArray((cart as any)?.state?.items)
+    ? (cart as any).state.items
     : [];
 
   const [date, setDate] = useState<string>(() => dateToYmd(new Date()));
@@ -53,15 +257,11 @@ export default function CalendarBookingPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [currentUser, setCurrentUser] = useState<LoggedInUser | null>(null);
-  const [creatingOrder, setCreatingOrder] = useState(false);
-  const [orderError, setOrderError] = useState<string | null>(null);
+  const [creatingAppointment, setCreatingAppointment] = useState(false);
+  const [appointmentError, setAppointmentError] = useState<string | null>(null);
 
   const minDate = useMemo(() => dateToYmd(new Date()), []);
-  const maxDate = useMemo(
-    () => dateToYmd(addDaysUtc(new Date(), 180)),
-    []
-  );
+  const maxDate = useMemo(() => dateToYmd(addDaysUtc(new Date(), 180)), []);
 
   // Persist service slug for other flows
   useEffect(() => {
@@ -106,26 +306,7 @@ export default function CalendarBookingPage() {
     };
   }, [slug]);
 
-  // 2) Load current logged-in user (for meta)
-  useEffect(() => {
-    let cancelled = false;
-
-    async function run() {
-      try {
-        const user = await getLoggedInUserApi();
-        if (!cancelled) setCurrentUser(user);
-      } catch {
-        // not logged in or /me failed; ignore
-      }
-    }
-
-    run();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // 3) Build slots when schedule or date changes
+  // 2) Build slots when schedule or date changes
   useEffect(() => {
     if (!schedule) {
       setSlots([]);
@@ -163,37 +344,89 @@ export default function CalendarBookingPage() {
     });
   }
 
-  // ---- Order creation ----
+  // ---- Order + Appointment creation ----
 
   async function handleContinue() {
-    setOrderError(null);
+    setAppointmentError(null);
 
     if (!selectedIso) {
-      setOrderError("Please select an appointment time first.");
+      setAppointmentError("Please select an appointment time first.");
       return;
     }
-    if (!schedule || !scheduleId) {
-      setOrderError("No schedule found for this service.");
+    if (!schedule) {
+      setAppointmentError("No schedule found for this service.");
       return;
     }
+
     if (!cartItems.length) {
-      setOrderError(
-        "Your basket is empty. Please add at least one item first."
+      setAppointmentError(
+        "Your basket is empty. Please add at least one treatment before booking."
       );
       return;
     }
 
-    const finalUserId = resolveUserIdFromStorage(currentUser);
-    if (!finalUserId) {
-      setOrderError(
-        "Could not determine your user. Make sure you are logged in."
+    // Logged-in user: prefer localStorage IDs, fallback to helper
+    const userIdFromLocal = readIdFromLocal([
+      "user_id",
+      "pe_user_id",
+      "userId",
+      "patient_id",
+    ]);
+    const userId = userIdFromLocal || resolveUserIdFromStorage();
+
+    if (!userId) {
+      setAppointmentError("You need to be logged in to book an appointment.");
+      return;
+    }
+
+    // Resolve service_id: first from localStorage, then from schedule/cart
+    const serviceIdFromLocal = readIdFromLocal([
+      "service_id",
+      "pe_service_id",
+      "serviceId",
+    ]);
+    const serviceId =
+      serviceIdFromLocal || resolveServiceId(schedule, cartItems);
+
+    if (!serviceId) {
+      setAppointmentError(
+        "Missing service information for this booking. Please start again from the service page."
       );
+
+      if (process.env.NODE_ENV !== "production") {
+        console.log(
+          "No service_id found in localStorage or schedule/cart. schedule:",
+          schedule
+        );
+      }
+      return;
+    }
+
+    // Resolve schedule_id: prefer localStorage, then state
+    const scheduleIdFromLocal = readIdFromLocal([
+      "schedule_id",
+      "pe_schedule_id",
+      "scheduleId",
+    ]);
+    const effectiveScheduleId =
+      scheduleIdFromLocal || (scheduleId ? String(scheduleId) : null);
+
+    if (!effectiveScheduleId) {
+      setAppointmentError(
+        "Missing schedule information for this booking. Please start again from the service page."
+      );
+      if (process.env.NODE_ENV !== "production") {
+        console.log(
+          "No schedule_id found in localStorage or state. schedule:",
+          schedule
+        );
+      }
       return;
     }
 
     const startDate = new Date(selectedIso);
     if (Number.isNaN(startDate.getTime())) {
-      setOrderError("Invalid appointment time selected.");
+      setAppointmentError("Invalid appointment time selected.");
       return;
     }
 
@@ -201,116 +434,19 @@ export default function CalendarBookingPage() {
     const endDate = new Date(startDate.getTime() + slotMinutes * 60_000);
     const endIso = endDate.toISOString();
 
-    const sessionId = getConsultationSessionIdFromStorage();
-    const rafQA = buildRafQAFromStorage(slug);
-
-    // Build meta.items from cartItems
-    const metaItems = cartItems.map((it: any) => {
-      const qty = Number(it.qty || 1);
-      const unitMinor =
-        typeof it.unitMinor === "number"
-          ? it.unitMinor
-          : typeof it.priceMinor === "number"
-          ? it.priceMinor
-          : Math.round((it.price ?? 0) * 100);
-
-      const totalMinor =
-        typeof it.totalMinor === "number" ? it.totalMinor : unitMinor * qty;
-
-      const variation =
-        it.variation ||
-        it.variations ||
-        it.variationText ||
-        it.variant ||
-        null;
-
-      return {
-        sku: it.sku,
-        name: it.name,
-        variations: variation,
-        strength: it.strength ?? null,
-        qty,
-        unitMinor,
-        totalMinor,
-        variation,
-      };
+    // Build order meta (cart + RAF + session)
+    const meta = buildOrderMeta({
+      cartItems,
+      serviceSlug: slug,
+      serviceName: schedule.name,
+      appointmentIso: selectedIso,
     });
 
-    const totalMinor = metaItems.reduce(
-      (sum: number, it: any) => sum + (it.totalMinor || 0),
-      0
-    );
-
-    const lines = metaItems.map((it: any, index: number) => ({
-      index,
-      name: it.name,
-      qty: it.qty,
-      variation: it.variation,
-    }));
-
-    const first = metaItems[0];
-    const selectedProduct = first
-      ? {
-          name: first.name,
-          variation: first.variation,
-          strength: first.strength ?? first.variation ?? null,
-          qty: first.qty,
-          unitMinor: first.unitMinor,
-          totalMinor: first.totalMinor,
-        }
-      : undefined;
-
-    // Merge user info from stored user + /me
-    const storedUser = getStoredUserFromStorage();
-    const userMeta: Record<string, any> = {};
-
-    const firstName =
-      storedUser?.firstName ||
-      (storedUser as any)?.first_name ||
-      currentUser?.firstName;
-    const lastName =
-      storedUser?.lastName ||
-      (storedUser as any)?.last_name ||
-      currentUser?.lastName;
-    const email = storedUser?.email || currentUser?.email;
-    const phone = storedUser?.phone || currentUser?.phone;
-    const dob = storedUser?.dob || currentUser?.dob;
-
-    if (firstName) userMeta.firstName = firstName;
-    if (lastName) userMeta.lastName = lastName;
-    if (email) userMeta.email = email;
-    if (phone) userMeta.phone = phone;
-    if (dob) userMeta.dob = dob;
-
-    const meta: Record<string, any> = {
-      lines,
-      type: "new",
-      items: metaItems,
-      selectedProduct,
-      createdAt: new Date().toISOString(),
-      totalMinor,
-      consultation_session_id: sessionId ?? undefined,
-      service_slug: slug,
-      service: schedule.name,
-      appointment_start_at: selectedIso,
-      formsQA: {
-        raf: {
-          form_id: null,
-          schema_version: null,
-          qa: rafQA,
-        },
-      },
-      payment_status: "pending",
-      ...userMeta,
-    };
-
-    const reference = generateReference();
-
-    const payload: CreateOrderPayload = {
-      user_id: finalUserId,
-      schedule_id: scheduleId,
-      service_id: schedule.service_id,
-      reference,
+    // Build order payload (NO reference sent from frontend)
+    const orderPayload: any = {
+      user_id: String(userId),
+      service_id: String(serviceId),
+      schedule_id: String(effectiveScheduleId),
       start_at: selectedIso,
       end_at: endIso,
       meta,
@@ -318,37 +454,86 @@ export default function CalendarBookingPage() {
     };
 
     if (process.env.NODE_ENV !== "production") {
-      console.log("Creating order with payload:", payload);
+      console.log("Creating order with payload:", orderPayload);
     }
 
-    setCreatingOrder(true);
+    setCreatingAppointment(true);
     try {
-      const order = await createOrderApi(payload);
+      // 1) Create order
+      const order = await createOrderApi(orderPayload);
+      const orderId = order && (order._id || null);
 
-      const orderId = order._id;
-      const responseRef = order.reference ?? reference;
+      if (!orderId) {
+        throw new Error("Order was created but no id was returned.");
+      }
 
       try {
-        localStorage.setItem("order_last_body", JSON.stringify(payload));
-        if (orderId) localStorage.setItem("order_id", String(orderId));
-        if (responseRef)
-          localStorage.setItem("order_reference", String(responseRef));
-      } catch {}
+        localStorage.setItem("order_id", String(orderId));
+      } catch {
+        // ignore storage errors
+      }
+
+      // 2) Create appointment linked to this order
+      const appointmentPayload: CreateAppointmentPayload = {
+        order_id: String(orderId),
+        user_id: String(userId),
+        service_id: String(serviceId),
+        schedule_id: String(effectiveScheduleId),
+        start_at: selectedIso,
+        end_at: endIso,
+      };
+
+      if (process.env.NODE_ENV !== "production") {
+        console.log("Creating appointment with payload:", appointmentPayload);
+      }
+
+      const appointment = await createAppointmentApi(appointmentPayload);
+
+      const appointmentId =
+        (appointment && (appointment._id || appointment.id)) || null;
+      const appointmentStart =
+        appointment?.start_at || appointment?.startAt || selectedIso;
+
+      // 2b) ✅ Mark order as having an appointment booked
+      try {
+        await updateOrderApi(String(orderId), {
+          is_appointment_booked: true,
+        } as any);
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error(
+            "Failed to update order is_appointment_booked flag:",
+            err
+          );
+        }
+        // don't block user redirect on this
+      }
+
+      try {
+        if (appointmentId)
+          localStorage.setItem("appointment_id", String(appointmentId));
+        if (appointmentStart)
+          localStorage.setItem(
+            "appointment_start_at",
+            String(appointmentStart)
+          );
+      } catch {
+        // ignore
+      }
 
       const qp = new URLSearchParams();
       qp.set("step", "payment");
+      qp.set("appointment_at", appointmentStart);
+      qp.set("service_slug", slug);
       if (orderId) qp.set("order", String(orderId));
-      if (responseRef) qp.set("reference", String(responseRef));
 
       router.push(
-        `/private-services/${encodeURIComponent(
-          slug
-        )}/book?${qp.toString()}`
+        `/private-services/${encodeURIComponent(slug)}/book?${qp.toString()}`
       );
     } catch (e: any) {
-      setOrderError(e?.message || "Failed to create order.");
+      setAppointmentError(e?.message || "Failed to create booking.");
     } finally {
-      setCreatingOrder(false);
+      setCreatingAppointment(false);
     }
   }
 
@@ -357,14 +542,12 @@ export default function CalendarBookingPage() {
       <div className="mx-auto max-w-3xl rounded-3xl border border-gray-200 bg-white p-6 md:p-8 shadow-sm">
         <div className="flex items-center justify-between gap-4 flex-wrap">
           <div>
-            <h1 className="text-2xl font-semibold">
-              Choose an appointment
-            </h1>
+            <h1 className="text-2xl font-semibold">Choose an appointment</h1>
             {schedule && (
               <p className="mt-1 text-xs text-gray-500">
                 {schedule.name} • Times shown in{" "}
-                {schedule.timezone || "local time"} •{" "}
-                {schedule.slot_minutes}-minute slots
+                {schedule.timezone || "local time"} • {schedule.slot_minutes}
+                -minute slots
               </p>
             )}
             {scheduleId && (
@@ -382,9 +565,7 @@ export default function CalendarBookingPage() {
                 disabled={atStart}
                 aria-disabled={atStart}
                 className={`rounded-full border px-3 py-1 text-sm ${
-                  atStart
-                    ? "opacity-40 cursor-not-allowed"
-                    : "hover:bg-gray-50"
+                  atStart ? "opacity-40 cursor-not-allowed" : "hover:bg-gray-50"
                 }`}
                 aria-label="Previous day"
                 title={atStart ? undefined : "Previous day"}
@@ -420,7 +601,7 @@ export default function CalendarBookingPage() {
         </div>
 
         <p className="mt-2 text-gray-600 text-sm">
-          Select a time below, then continue to create your order.
+          Select a time below, then continue to payment.
         </p>
 
         {/* Override / status banner */}
@@ -440,17 +621,15 @@ export default function CalendarBookingPage() {
           </div>
         )}
 
-        {orderError && (
+        {appointmentError && (
           <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">
-            {orderError}
+            {appointmentError}
           </div>
         )}
 
         <div className="mt-6">
           {loading ? (
-            <div className="text-sm text-gray-500">
-              Loading schedule…
-            </div>
+            <div className="text-sm text-gray-500">Loading schedule…</div>
           ) : error ? (
             <div className="text-sm text-rose-600">
               Failed to load schedule: {error}
@@ -506,23 +685,22 @@ export default function CalendarBookingPage() {
           )}
         </div>
 
-        {/* Continue / create order */}
-        <div className="mt-8 flex justify-end">
-          <button
-            type="button"
-            onClick={handleContinue}
-            disabled={
-              !selectedIso || creatingOrder || loading || !!error
-            }
-            className={`px-6 py-2.5 rounded-full text-sm font-medium transition ${
-              !selectedIso || creatingOrder || loading || !!error
-                ? "bg-emerald-200 text-white cursor-not-allowed opacity-70"
-                : "bg-emerald-500 text-white hover:bg-emerald-600"
-            }`}
-          >
-            {creatingOrder ? "Creating order…" : "Continue to payment"}
-          </button>
-        </div>
+        {!loading && !error && schedule && hasSlots && (
+          <div className="mt-8 flex justify-end">
+            <button
+              type="button"
+              onClick={handleContinue}
+              disabled={creatingAppointment || !selectedIso}
+              className={`inline-flex items-center rounded-full px-5 py-2 text-sm font-semibold text-white shadow-sm ${
+                creatingAppointment || !selectedIso
+                  ? "bg-emerald-300 cursor-not-allowed opacity-80"
+                  : "bg-emerald-600 hover:bg-emerald-700"
+              }`}
+            >
+              {creatingAppointment ? "Booking…" : "Book Appointment"}
+            </button>
+          </div>
+        )}
       </div>
     </main>
   );

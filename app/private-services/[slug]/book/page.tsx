@@ -10,7 +10,7 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import {
   fetchServiceBySlug,
   type ServiceDetail,
-  getBackendBase,
+  resolveUserIdFromStorage, // ✅ still used just for login state
 } from "@/lib/api";
 import toast from "react-hot-toast";
 import { useCart } from "@/components/cart/cart-context";
@@ -68,11 +68,7 @@ const RAF_SECTION_STORAGE_KEY = (slug: string) => `raf_section.${slug}`;
 
 /**
  * Clear booking-specific storage for a given service slug.
- * - Clears appointment selection
- * - Clears order ids/references/last body
- * - Clears schedule_id + booking_next / booking_slug
- * - Clears consultation session id + raf section index
- * - DOES NOT clear raf_answers so user can re-use previous answers.
+ * (We still clear order-related keys here, but this page no longer creates orders.)
  */
 function clearBookingStateForSlug(slug: string) {
   if (typeof window === "undefined" || !slug) return;
@@ -96,9 +92,8 @@ function clearBookingStateForSlug(slug: string) {
     "booking_next",
     "booking_slug",
 
-    // order-specific
+    // order-specific (note: no creation here, just cleanup)
     "order_id",
-    "order_reference",
     "order_last_body",
 
     // consultation session
@@ -130,315 +125,6 @@ function clearBookingStateForSlug(slug: string) {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                               HELPER UTILS                                 */
-/* -------------------------------------------------------------------------- */
-
-function safeJsonParse<T = any>(raw: string | null): T | null {
-  if (!raw) return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-function readSelectedIsoFromStorage(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const keys = [
-      "appointment_at",
-      "selected_appointment_at",
-      "booking_at",
-      "calendar_selected_at",
-    ];
-    for (const k of keys) {
-      const v = sessionStorage.getItem(k) || localStorage.getItem(k);
-      if (v) return v;
-    }
-  } catch {}
-  return null;
-}
-
-function getCurrentUserId(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw =
-      localStorage.getItem("pharmacy_user") ||
-      localStorage.getItem("user") ||
-      localStorage.getItem("user_data") ||
-      localStorage.getItem("pe_user") ||
-      localStorage.getItem("pe.user");
-    const parsed = safeJsonParse<any>(raw);
-    if (!parsed) return null;
-    return parsed._id || parsed.userId || parsed.id || null;
-  } catch {
-    return null;
-  }
-}
-
-function readCookie(name: string): string | null {
-  if (typeof document === "undefined") return null;
-  const pairs = document.cookie.split("; ");
-  for (const pair of pairs) {
-    const eq = pair.indexOf("=");
-    if (eq === -1) continue;
-    const key = decodeURIComponent(pair.slice(0, eq));
-    if (key === name) {
-      return decodeURIComponent(pair.slice(eq + 1));
-    }
-  }
-  return null;
-}
-
-function getConsultationSessionId(): number | null {
-  if (typeof window === "undefined") return null;
-  const keys = [
-    "consultation_session_id",
-    "pe_consultation_session_id",
-    "consultationSessionId",
-  ];
-  for (const k of keys) {
-    try {
-      const raw =
-        localStorage.getItem(k) ||
-        sessionStorage.getItem(k) ||
-        readCookie(k) ||
-        null;
-      const n = raw ? Number(raw) : NaN;
-      if (Number.isFinite(n) && n > 0) return n;
-    } catch {}
-  }
-  return null;
-}
-
-function readRafAnswers(slug: string): Record<string, any> | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const keys = [
-      `raf_answers.${slug}`,
-      `raf.answers.${slug}`,
-      `assessment.answers.${slug}`,
-    ];
-    for (const k of keys) {
-      const raw = localStorage.getItem(k);
-      if (raw) {
-        return JSON.parse(raw);
-      }
-    }
-  } catch {}
-  return null;
-}
-
-function formatAnswer(v: any): string {
-  if (v === null || v === undefined) return "";
-  if (Array.isArray(v)) return v.map(formatAnswer).join(", ");
-  if (typeof v === "object") {
-    if ("label" in v) return String((v as any).label);
-    if ("value" in v) return String((v as any).value);
-    return JSON.stringify(v);
-  }
-  return String(v);
-}
-
-function buildRafQA(slug: string): any[] {
-  const answers = readRafAnswers(slug);
-  if (!answers) return [];
-  return Object.entries(answers).map(([key, raw], index) => ({
-    key,
-    question: `Question ${index + 1}`,
-    answer: formatAnswer(raw),
-    raw,
-  }));
-}
-
-type SimpleSchedule = {
-  _id: string;
-  name: string;
-  service_id: string;
-  service_slug: string;
-  slot_minutes?: number;
-};
-
-// Try to load schedule for this service (by stored id or by slug)
-async function loadScheduleForOrder(
-  serviceSlug: string
-): Promise<SimpleSchedule | null> {
-  const base = getBackendBase(); // e.g. http://localhost:8000/api
-
-  // 1) If we have schedule_id stored from CalendarStep, try that first.
-  let storedId: string | null = null;
-  try {
-    storedId =
-      (typeof window !== "undefined" &&
-        (localStorage.getItem("schedule_id") ||
-          sessionStorage.getItem("schedule_id"))) ||
-      null;
-  } catch {
-    storedId = null;
-  }
-
-  if (storedId) {
-    try {
-      const token =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem("session_token")
-          : null;
-
-      const res = await fetch(`${base}/schedules/${storedId}`, {
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      });
-      if (res.ok) {
-        const sch = (await res.json()) as SimpleSchedule;
-        if (sch && sch._id) return sch;
-      }
-    } catch {
-      // ignore and fall back to list
-    }
-  }
-
-  // 2) Fallback: list all schedules and find by service_slug
-  try {
-    const token =
-      typeof window !== "undefined"
-        ? window.localStorage.getItem("session_token")
-        : null;
-
-    const res = await fetch(`${base}/schedules`, {
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-    });
-    if (!res.ok) return null;
-    const json = await res.json();
-    let list: SimpleSchedule[] = [];
-    if (Array.isArray((json as any)?.data)) {
-      list = (json as any).data;
-    } else if (Array.isArray(json)) {
-      list = json;
-    }
-    const match =
-      list.find((s) => s.service_slug === serviceSlug) || list[0] || null;
-    return match || null;
-  } catch {
-    return null;
-  }
-}
-
-function buildOrderMeta(opts: {
-  cartItems: any[];
-  serviceSlug: string;
-  serviceName?: string;
-  appointmentIso: string;
-}) {
-  const items = (opts.cartItems || []).map((ci: any) => {
-    const unitMinor =
-      typeof ci.unitMinor === "number"
-        ? ci.unitMinor
-        : ci.price
-        ? Math.round(Number(ci.price) * 100)
-        : 0;
-    const qty = Number(ci.qty || 1);
-    const totalMinor =
-      typeof ci.totalMinor === "number" ? ci.totalMinor : unitMinor * qty;
-
-    const variation =
-      ci.variation ||
-      ci.variations ||
-      ci.optionLabel ||
-      ci.selectedLabel ||
-      ci.label ||
-      "";
-
-    return {
-      sku: ci.sku,
-      name: ci.name,
-      variations: variation || null,
-      strength: ci.strength ?? null,
-      qty,
-      unitMinor,
-      totalMinor,
-      variation: variation || null,
-    };
-  });
-
-  const lines = items.map((it: any, index: number) => ({
-    index,
-    name: it.name,
-    qty: it.qty,
-    variation: it.variation || it.variations || "",
-  }));
-
-  const totalMinor = items.reduce(
-    (sum: number, it: any) => sum + (it.totalMinor || 0),
-    0
-  );
-
-  const sessionId = getConsultationSessionId();
-  const rafQA = buildRafQA(opts.serviceSlug);
-
-  const meta: any = {
-    type: "new",
-    lines,
-    items,
-    totalMinor,
-    service_slug: opts.serviceSlug,
-    service: opts.serviceName || opts.serviceSlug,
-    appointment_start_at: opts.appointmentIso,
-    consultation_session_id: sessionId ?? undefined,
-    payment_status: "pending",
-    formsQA: {
-      risk_assessment: {
-        form_id: null,
-        schema_version: null,
-        qa: [],
-      },
-      assessment: {
-        form_id: null,
-        schema_version: null,
-        qa: [],
-      },
-      raf: {
-        form_id: null,
-        schema_version: null,
-        qa: rafQA,
-      },
-    },
-  };
-
-  if (items[0]) {
-    const first = items[0];
-    meta.selectedProduct = {
-      name: first.name,
-      variation: first.variation || first.variations || null,
-      strength: first.strength || first.variation || null,
-      qty: first.qty,
-      unitMinor: first.unitMinor,
-      totalMinor: first.totalMinor,
-    };
-  }
-
-  return meta;
-}
-
-// Create ISO end_at by adding slotMinutes to start_at
-function computeEndIso(startIso: string, slotMinutes?: number): string {
-  const d = new Date(startIso);
-  if (Number.isNaN(d.getTime())) return startIso;
-  const mins =
-    Number.isFinite(slotMinutes || 0) && (slotMinutes || 0) > 0
-      ? (slotMinutes as number)
-      : 15;
-  d.setMinutes(d.getMinutes() + mins);
-  return d.toISOString();
-}
-
-/* -------------------------------------------------------------------------- */
 /*                               MAIN PAGE                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -447,7 +133,18 @@ export default function BookServicePage() {
   const slug = params?.slug ?? "";
 
   const { user } = useAuth();
-  const isLoggedIn = !!user;
+
+  // 🔑 unified user-id resolution (context + localStorage)
+  const [resolvedUserId, setResolvedUserId] = React.useState<string | null>(
+    null
+  );
+
+  React.useEffect(() => {
+    const id = resolveUserIdFromStorage(user as any);
+    setResolvedUserId(id);
+  }, [user]);
+
+  const isLoggedIn = !!user || !!resolvedUserId;
 
   // Cart info for gating + summary (raw, from context)
   const cart = useCart() as any;
@@ -539,20 +236,33 @@ export default function BookServicePage() {
   const prevStep: StepKey | null =
     currentIndex > 0 ? flow[currentIndex - 1] : null;
 
-  // Order creation flags
-  const [creatingOrder, setCreatingOrder] = React.useState(false);
-  const [orderCreated, setOrderCreated] = React.useState(false);
-
-  /* ---------- Load service detail ---------- */
+  /* ---------- Load service detail (by slug) & store service_id locally ----- */
 
   React.useEffect(() => {
     let cancelled = false;
 
     async function load() {
       try {
+        if (!slug) return;
         setServiceLoading(true);
         const s = await fetchServiceBySlug(slug);
-        if (!cancelled) setService(s);
+
+        if (cancelled) return;
+
+        setService(s);
+
+        // ✅ store service_id & slug in local/session storage (used by other steps/pages)
+        try {
+          if (typeof window !== "undefined" && (s as any)?._id) {
+            const sid = String((s as any)._id);
+            window.localStorage.setItem("service_id", sid);
+            window.sessionStorage.setItem("service_id", sid);
+            window.localStorage.setItem("service_slug", slug);
+            window.sessionStorage.setItem("service_slug", slug);
+          }
+        } catch {
+          // ignore storage errors
+        }
       } catch (e) {
         console.error("Failed to load service detail", e);
       } finally {
@@ -560,7 +270,7 @@ export default function BookServicePage() {
       }
     }
 
-    if (slug) load();
+    load();
     return () => {
       cancelled = true;
     };
@@ -575,7 +285,7 @@ export default function BookServicePage() {
     }
   }, [isLoggedIn, currentStep]);
 
-    // 🔄 When user reaches the final "success" step, clear old booking/order state
+  // 🔄 When user reaches the final "success" step, clear old booking/order state
   React.useEffect(() => {
     if (!slug) return;
     if (currentStep === "success") {
@@ -583,8 +293,7 @@ export default function BookServicePage() {
     }
   }, [slug, currentStep]);
 
-
-  /* ---------- Guards & order creation ---------- */
+  /* ---------- Guards (no order creation here) ---------- */
 
   const canProceedFrom = React.useCallback(
     (step: StepKey): { ok: boolean; message?: string } => {
@@ -608,134 +317,9 @@ export default function BookServicePage() {
     [hasCartItems, isLoggedIn]
   );
 
-  async function createOrderIfNeeded(): Promise<{
-    ok: boolean;
-    message?: string;
-  }> {
-    if (orderCreated) return { ok: true };
+  /* ---------- Navigation handlers (just step changes) ---------- */
 
-    const startIso = readSelectedIsoFromStorage();
-    if (!startIso) {
-      return { ok: false, message: "Pick an appointment time first." };
-    }
-
-    const authUserId = (user as any)?._id as string | undefined;
-    const userId = authUserId ?? getCurrentUserId();
-    if (!userId) {
-      return {
-        ok: false,
-        message: "Could not determine your user. Please log in again.",
-      };
-    }
-
-    if (!hasCartItems) {
-      return {
-        ok: false,
-        message: "Your basket is empty. Please add at least one item.",
-      };
-    }
-
-    try {
-      const schedule = await loadScheduleForOrder(slug);
-      if (!schedule) {
-        return {
-          ok: false,
-          message: "No schedule configured for this service.",
-        };
-      }
-
-      const scheduleId = schedule._id;
-      const serviceId = schedule.service_id;
-      const slotMinutes = schedule.slot_minutes ?? 15;
-      const endIso = computeEndIso(startIso, slotMinutes);
-
-      const now = new Date();
-      const ref = `ORD-${now.getFullYear()}-${now
-        .getTime()
-        .toString(36)
-        .toUpperCase()}`;
-
-      const meta = buildOrderMeta({
-        cartItems,
-        serviceSlug: slug,
-        serviceName: schedule.name,
-        appointmentIso: startIso,
-      });
-
-      const base = getBackendBase();
-      const token =
-        typeof window !== "undefined"
-          ? window.localStorage.getItem("session_token")
-          : null;
-
-      const body: any = {
-        user_id: userId,
-        schedule_id: scheduleId,
-        service_id: serviceId,
-        reference: ref,
-        start_at: startIso,
-        end_at: endIso,
-        meta,
-        payment_status: "pending",
-      };
-
-      const res = await fetch(`${base}/orders`, {
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify(body),
-      });
-
-      const text = await res.text().catch(() => "");
-      if (!res.ok) {
-        let msg = text;
-        try {
-          const j = JSON.parse(text);
-          msg = j?.message || msg;
-        } catch {}
-        return {
-          ok: false,
-          message:
-            msg ||
-            `Failed to create order (HTTP ${res.status}). Check required fields on the backend.`,
-        };
-      }
-
-      let order: any = null;
-      try {
-        order = text ? JSON.parse(text) : null;
-      } catch {
-        order = null;
-      }
-
-      try {
-        if (order?._id) {
-          localStorage.setItem("order_id", String(order._id));
-          sessionStorage.setItem("order_id", String(order._id));
-        }
-        if (order?.reference || ref) {
-          const finalRef = order?.reference || ref;
-          localStorage.setItem("order_reference", String(finalRef));
-          sessionStorage.setItem("order_reference", String(finalRef));
-        }
-      } catch {}
-
-      setOrderCreated(true);
-      return { ok: true };
-    } catch (e: any) {
-      return {
-        ok: false,
-        message: e?.message || "Network error while creating order.",
-      };
-    }
-  }
-
-  /* ---------- Navigation handlers ---------- */
-
-  const handleNext = async () => {
+  const handleNext = () => {
     if (!nextStep) return;
 
     const guard = canProceedFrom(currentStep);
@@ -744,21 +328,7 @@ export default function BookServicePage() {
       return;
     }
 
-    if (currentStep === "calendar") {
-      setCreatingOrder(true);
-      const { ok, message } = await createOrderIfNeeded();
-      setCreatingOrder(false);
-
-      if (!ok) {
-        toast.error(
-          message || "Could not create your order. Please try again."
-        );
-        return;
-      }
-
-      toast.success("Your appointment has been reserved.");
-    }
-
+    // ❌ No order creation here anymore
     setCurrentStep(nextStep);
   };
 
@@ -778,8 +348,7 @@ export default function BookServicePage() {
   const nextDisabled =
     !nextStep ||
     (currentStep === "treatments" && !hasCartItems) ||
-    (currentStep === "login" && !isLoggedIn) ||
-    creatingOrder;
+    (currentStep === "login" && !isLoggedIn);
 
   /* ---------- Render ---------- */
 
@@ -926,7 +495,7 @@ export default function BookServicePage() {
                     disabled={nextDisabled}
                     className="inline-flex items-center rounded-full bg-emerald-600 px-5 py-2 text-[11px] font-semibold text-white shadow-soft-card hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {creatingOrder ? "Booking…" : `${nextButtonLabel} →`}
+                    {nextButtonLabel} →
                   </button>
                 </div>
               </div>

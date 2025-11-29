@@ -39,7 +39,6 @@ export default function OrdersTab() {
       setOrdersLoading(true);
       setOrdersError(null);
       try {
-        // 🔧 non-null assertion is safe because we returned above if !userId
         const res = await getUserOrdersApi(userId!, 1, 20);
         if (!cancelled) {
           setOrders(res.data || []);
@@ -97,6 +96,21 @@ export default function OrdersTab() {
                 ? order.meta.lines[0]
                 : null;
 
+            const appointmentBooked = Boolean(order.is_appointment_booked);
+
+            // Prefer order.start_at, fall back to meta.appointment_start_at
+            const appointmentStartRaw: string | null =
+              order.start_at ||
+              (order.meta?.appointment_start_at as string | undefined) ||
+              null;
+
+            const appointmentLabel =
+              appointmentBooked && appointmentStartRaw
+                ? formatDateTime(appointmentStartRaw)
+                : appointmentBooked
+                ? "Appointment booked"
+                : "Not yet booked";
+
             return (
               <div
                 key={order._id}
@@ -117,19 +131,29 @@ export default function OrdersTab() {
                       <span className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
                         {order.reference}
                       </span>
+
                       <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
                         {order.status}
                       </span>
+
                       <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
                         {order.payment_status}
                       </span>
+
+                      {appointmentBooked && (
+                        <span className="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold text-blue-700">
+                          Appointment booked
+                        </span>
+                      )}
                     </div>
+
                     <p className="text-xs font-medium text-slate-900">
                       {order.service_name || "Service"} ·{" "}
                       {firstLine
                         ? `${firstLine.name} × ${firstLine.qty}`
                         : "View details"}
                     </p>
+
                     <p className="text-[11px] text-slate-500">
                       Placed on {formatDate(order.createdAt)} ·{" "}
                       {formatMoneyFromMinor(order.meta?.totalMinor)}
@@ -138,8 +162,8 @@ export default function OrdersTab() {
 
                   <div className="flex items-center gap-3">
                     <span className="hidden text-[11px] text-slate-500 sm:inline">
-                      {order.start_at
-                        ? formatDateTime(order.start_at)
+                      {appointmentBooked && appointmentStartRaw
+                        ? appointmentLabel
                         : "No appointment booked"}
                     </span>
                     <ChevronDown
@@ -189,8 +213,8 @@ export default function OrdersTab() {
                             <CalendarIcon className="h-3.5 w-3.5 text-slate-400" />
                             <span>
                               Appointment:{" "}
-                              {order.start_at
-                                ? formatDateTime(order.start_at)
+                              {appointmentBooked && appointmentStartRaw
+                                ? appointmentLabel
                                 : "Not yet booked"}
                             </span>
                           </p>

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { ShoppingCart, X, Trash2, ArrowRight } from "lucide-react";
-import { useCart, type CartItem } from "./cart-context";
+import { useCart, type CartItem, cartItemKey } from "./cart-context";
 
 function useMediaQuery(query: string) {
   const [matches, setMatches] = useState(false);
@@ -136,10 +136,7 @@ function CartSheet({
             </p>
           ) : (
             items.map((item) => {
-              const key =
-                item.id ||
-                item.sku ||
-                `${item.name}::${item.variation || ""}`;
+              const key = cartItemKey(item);
 
               const unitMinor = getUnitMinor(item);
               const qty = getQty(item);

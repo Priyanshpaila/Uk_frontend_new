@@ -14,9 +14,9 @@ export type CartItem = {
   sku?: string;
   name: string;
   qty: number;
-  price?: number;       // in pounds (optional)
-  unitMinor?: number;   // in minor units (pence)
-  totalMinor?: number;  // in minor units (pence)
+  price?: number; // in pounds
+  unitMinor?: number; // in minor units (pence)
+  totalMinor?: number; // in minor units (pence)
   image?: string | null;
   variation?: string | null;
   [key: string]: any;
@@ -47,13 +47,19 @@ const CartContext = createContext<CartContextValue | undefined>(undefined);
 // Key used in localStorage
 const STORAGE_KEY = "pe_cart_v1";
 
-function makeKey(item: CartItem): string {
-  return (
-    item.id ||
-    item.sku ||
-    `${item.name}::${item.variation || ""}` ||
-    Math.random().toString(36)
-  );
+/**
+ * 🔑 Single source of truth for how we identify a cart line.
+ * Same medicine + different variation => different key.
+ */
+export function cartItemKey(item: CartItem): string {
+  const base = item.id || item.sku || item.name || "item";
+  const variation =
+    item.variation ||
+    (item as any).label ||
+    (item as any).optionLabel ||
+    (item as any).strength ||
+    "";
+  return `${base}::${variation}`;
 }
 
 export function CartProvider({ children }: { children: ReactNode }) {
@@ -86,8 +92,10 @@ export function CartProvider({ children }: { children: ReactNode }) {
     setState((prev) => {
       const items = [...prev.items];
 
-      const key = makeKey(item);
-      const existingIndex = items.findIndex((it) => makeKey(it) === key);
+      const key = cartItemKey(item);
+      const existingIndex = items.findIndex(
+        (it) => cartItemKey(it) === key
+      );
 
       if (existingIndex >= 0) {
         const existing = items[existingIndex];
@@ -108,7 +116,9 @@ export function CartProvider({ children }: { children: ReactNode }) {
     setState((prev) => {
       const items = prev.items
         .map((it) =>
-          makeKey(it) === key ? { ...it, qty: Math.max(1, qty) } : it
+          cartItemKey(it) === key
+            ? { ...it, qty: Math.max(1, qty) }
+            : it
         )
         .filter((it) => it.qty > 0);
       return { items };
@@ -117,7 +127,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
   const removeItem = (key: string) => {
     setState((prev) => ({
-      items: prev.items.filter((it) => makeKey(it) !== key),
+      items: prev.items.filter((it) => cartItemKey(it) !== key),
     }));
   };
 

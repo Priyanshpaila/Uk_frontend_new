@@ -1,5 +1,10 @@
 import type { AuthUser } from "@/components/auth/AuthProvider";
 
+// const CLINIC_TIMEZONE =
+//   process.env.NEXT_PUBLIC_CLINIC_TIMEZONE || "Europe/London";
+
+const CLINIC_TIMEZONE = "UTC";
+
 export function formatDate(iso?: string) {
   if (!iso) return "Not set";
   const d = new Date(iso);
@@ -11,16 +16,19 @@ export function formatDate(iso?: string) {
   });
 }
 
-export function formatDateTime(iso?: string) {
-  if (!iso) return "Not set";
+export function formatDateTime(iso?: string | null): string {
+  if (!iso) return "";
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "Not set";
+  if (Number.isNaN(d.getTime())) return "";
+
   return d.toLocaleString("en-GB", {
     day: "2-digit",
     month: "short",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    hour12: false,
+    timeZone: CLINIC_TIMEZONE, // 👈 force UK/clinic timezone
   });
 }
 

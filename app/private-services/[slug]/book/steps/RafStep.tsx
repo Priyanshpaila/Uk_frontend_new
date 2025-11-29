@@ -8,6 +8,8 @@ import {
   type SetStateAction,
 } from "react";
 import { useSearchParams, useParams, useRouter } from "next/navigation";
+import { ArrowLeft, AlertCircle, CheckCircle2 } from "lucide-react";
+
 import {
   fetchRafFormForService,
   createConsultationSessionApi,
@@ -15,7 +17,6 @@ import {
   uploadRafFile,
   type IntakeUploadResult,
 } from "@/lib/api";
-import { ArrowLeft, AlertCircle, CheckCircle2 } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
 /* Types & helpers for dynamic questions                              */
@@ -524,6 +525,9 @@ export default function RafStep() {
   const [sessionId, setSessionId] = useState<number | undefined>(() =>
     resolveInitialSessionId(search as any)
   );
+  const [formMetaServiceId, setServiceId] = useState<string | null>(
+    serviceIdParam ?? null
+  );
 
   // keep URL session_id in sync if it changes later
   useEffect(() => {
@@ -604,6 +608,10 @@ export default function RafStep() {
         if (!result) {
           setQuestions([]);
           return;
+        }
+
+        if (result.service_id) {
+          setServiceId(result.service_id);
         }
 
         const list = toQuestionArray(result.schema);
@@ -890,7 +898,7 @@ export default function RafStep() {
     return out;
   }
 
-  const onContinue = async () => {
+  const onSubmit = async () => {
     setSubmitting(true);
     setError(null);
     setSaveFlash("Saving…");
@@ -927,7 +935,9 @@ export default function RafStep() {
             ts: Date.now(),
           })
         );
-      } catch {}
+      } catch {
+        // ignore
+      }
 
       setSaveFlash("Saved");
       setTimeout(() => setSaveFlash(null), 1500);
@@ -938,8 +948,11 @@ export default function RafStep() {
         qp.set("session_id", String(sid));
         try {
           document.cookie = `pe_consultation_session_id=${sid}; path=/; max-age=604800`;
-        } catch {}
+        } catch {
+          // ignore
+        }
       }
+
       router.push(
         `/private-services/${encodeURIComponent(slug)}/book?${qp.toString()}`
       );
@@ -1061,7 +1074,7 @@ export default function RafStep() {
             <>
               {/* Section navigation (inside card, TOP ONLY) */}
               {sections.order.length > 1 && (
-                <div className="mb-4 flex items-center justify-between text-xs sm:text-sm">
+                <div className="mb-4 flex items-center justify_between text-xs sm:text-sm">
                   <div className="flex items-center gap-2 text-slate-700">
                     <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-[11px] font-semibold text-emerald-700">
                       {sectionIdx + 1}
@@ -1111,9 +1124,9 @@ export default function RafStep() {
             </>
           )}
 
-          {/* Footer inside card (ONLY Back + Continue, no section nav) */}
+          {/* Footer inside card */}
           <footer className="mt-8 flex flex-col gap-4 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-2 text-xs text-slate-600">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
               <span>
                 {answeredRequired} of {totalRequired || 0} required questions
@@ -1127,6 +1140,20 @@ export default function RafStep() {
               )}
             </div>
 
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+              <button
+                type="button"
+                onClick={onSubmit}
+                disabled={submitting}
+                className={`inline-flex items-center justify-center rounded-full px-5 py-2 text-xs font-semibold text-white shadow-sm ${
+                  submitting
+                    ? "bg-emerald-300 cursor-not-allowed opacity-80"
+                    : "bg-emerald-600 hover:bg-emerald-700"
+                }`}
+              >
+                {submitting ? "Saving…" : "Save"}
+              </button>
+            </div>
           </footer>
         </section>
       </main>
@@ -1135,7 +1162,7 @@ export default function RafStep() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Question field renderer (styled for your theme)                     */
+/* Question field renderer                                            */
 /* ------------------------------------------------------------------ */
 
 function QuestionField({
@@ -1200,6 +1227,7 @@ function QuestionField({
           </p>
         )}
         {src ? (
+          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={src}
             alt={q.label || "Image"}
@@ -1329,7 +1357,7 @@ function QuestionField({
             return (
               <label
                 key={opt.value}
-                className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
+                className={`flex items_center gap-2 rounded-xl border px-3 py-2 text-sm ${
                   checked
                     ? "border-emerald-400 bg-emerald-50"
                     : "border-slate-200 bg-white"

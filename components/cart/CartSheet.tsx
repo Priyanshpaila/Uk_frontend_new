@@ -1,56 +1,35 @@
 "use client";
 
 import { useEffect } from "react";
-import {
-  X,
-  Trash2,
-  Minus,
-  Plus,
-  ShoppingBag,
-} from "lucide-react";
-import { useCart } from "./cart-context";
-
+import { X, Trash2, Minus, Plus, ShoppingBag } from "lucide-react";
+import { useCart, type CartItem, cartItemKey } from "./cart-context";
 
 // Helper to read items in a tolerant way (cart.items OR cart.state.items)
 function useCartItems() {
-  const cart = useCart() as any;
-  const items: any[] = Array.isArray(cart?.items)
-    ? cart.items
-    : Array.isArray(cart?.state?.items)
-    ? cart.state.items
+  const cart = useCart();
+  const items: CartItem[] = Array.isArray((cart as any)?.items)
+    ? (cart as any).items
+    : Array.isArray((cart as any)?.state?.items)
+    ? (cart as any).state.items
     : [];
 
   return { cart, items };
 }
 
-function getItemId(item: any): string {
-  return (
-    item.id ||
-    item._id ||
-    item.sku ||
-    item.slug ||
-    item.name ||
-    Math.random().toString(36)
-  );
+function getItemQty(item: CartItem): number {
+  return Number(item.qty ?? (item as any).quantity ?? (item as any).count ?? 1);
 }
 
-function getItemQty(item: any): number {
-  return Number(
-    item.qty ??
-      item.quantity ??
-      item.count ??
-      1
-  );
-}
-
-function getMinorPrice(item: any): number {
+function getMinorPrice(item: CartItem): number {
   if (typeof item.totalMinor === "number") return item.totalMinor;
+  const qty = getItemQty(item);
+
   if (typeof item.unitMinor === "number")
-    return item.unitMinor * getItemQty(item);
-  if (typeof item.priceMinor === "number")
-    return item.priceMinor * getItemQty(item);
+    return item.unitMinor * qty;
+  if (typeof (item as any).priceMinor === "number")
+    return (item as any).priceMinor * qty;
   if (typeof item.price === "number")
-    return Math.round(item.price * 100) * getItemQty(item);
+    return Math.round(item.price * 100) * qty;
   return 0;
 }
 
@@ -88,38 +67,59 @@ export default function CartSheet({ open, onClose }: CartSheetProps) {
 
   if (!open) return null;
 
-  const canUpdateQty =
+  const hasUpdateQty =
     typeof (cart as any)?.updateItemQty === "function" ||
     typeof (cart as any)?.setItemQty === "function";
 
-  const canRemove =
+  const hasRemove =
     typeof (cart as any)?.removeItem === "function" ||
     typeof (cart as any)?.remove === "function";
 
-  const canClear = typeof (cart as any)?.clear === "function";
+  const hasClear = typeof (cart as any)?.clearCart === "function";
 
-  const handleQtyChange = (item: any, delta: number) => {
-    if (!canUpdateQty) return;
-    const id = getItemId(item);
+  const handleQtyChange = (item: CartItem, delta: number) => {
+    if (!hasUpdateQty) return;
+
+    const key = cartItemKey(item);
     const current = getItemQty(item);
-    const next = Math.max(1, current + delta);
+
+    const min =
+      Number(
+        (item as any).minQty ??
+          (item as any).min_qty ??
+          1
+      ) || 1;
+
+    const maxRaw =
+      (item as any).maxQty ??
+      (item as any).max_qty ??
+      (item as any).max_bookable_quantity ??
+      null;
+    const max =
+      typeof maxRaw === "number" && maxRaw > 0 ? maxRaw : null;
+
+    let next = current + delta;
+    if (next < min) next = min;
+    if (max != null && next > max) next = max;
 
     const updater =
       (cart as any).updateItemQty || (cart as any).setItemQty;
-    updater(id, next);
+    if (!updater) return;
+
+    updater(key, next);
   };
 
-  const handleRemove = (item: any) => {
-    if (!canRemove) return;
-    const id = getItemId(item);
+  const handleRemove = (item: CartItem) => {
+    if (!hasRemove) return;
+    const key = cartItemKey(item);
     const remover =
       (cart as any).removeItem || (cart as any).remove;
-    remover(id);
+    remover(key);
   };
 
   const handleClear = () => {
-    if (!canClear) return;
-    (cart as any).clear();
+    if (!hasClear) return;
+    (cart as any).clearCart();
   };
 
   return (
@@ -173,8 +173,8 @@ export default function CartSheet({ open, onClose }: CartSheetProps) {
               </div>
             ) : (
               <ul className="space-y-3">
-                {items.map((item: any) => {
-                  const id = getItemId(item);
+                {items.map((item) => {
+                  const key = cartItemKey(item);
                   const qty = getItemQty(item);
                   const lineMinor = getMinorPrice(item);
                   const unitMinor =
@@ -184,7 +184,7 @@ export default function CartSheet({ open, onClose }: CartSheetProps) {
 
                   return (
                     <li
-                      key={id}
+                      key={key}
                       className="flex gap-3 rounded-2xl border border-slate-100 bg-slate-50/60 p-3"
                     >
                       {/* Thumbnail / initials */}
@@ -205,12 +205,11 @@ export default function CartSheet({ open, onClose }: CartSheetProps) {
                         <div className="flex items-start justify-between gap-2">
                           <div>
                             <p className="text-xs font-semibold text-slate-900">
-                              {item.name || item.title || "Treatment"}
+                              {item.name || (item as any).title || "Treatment"}
                             </p>
-                            {(item.variation ||
-                              item.strength) && (
+                            {(item.variation || (item as any).strength) && (
                               <p className="text-[11px] text-slate-500">
-                                {item.variation || item.strength}
+                                {item.variation || (item as any).strength}
                               </p>
                             )}
                           </div>
@@ -232,10 +231,8 @@ export default function CartSheet({ open, onClose }: CartSheetProps) {
                           <div className="inline-flex items-center rounded-full border border-slate-200 bg-white px-1 py-0.5">
                             <button
                               type="button"
-                              onClick={() =>
-                                handleQtyChange(item, -1)
-                              }
-                              disabled={!canUpdateQty || qty <= 1}
+                              onClick={() => handleQtyChange(item, -1)}
+                              disabled={!hasUpdateQty || qty <= 1}
                               className="flex h-6 w-6 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Minus className="h-3 w-3" />
@@ -245,10 +242,8 @@ export default function CartSheet({ open, onClose }: CartSheetProps) {
                             </span>
                             <button
                               type="button"
-                              onClick={() =>
-                                handleQtyChange(item, +1)
-                              }
-                              disabled={!canUpdateQty}
+                              onClick={() => handleQtyChange(item, +1)}
+                              disabled={!hasUpdateQty}
                               className="flex h-6 w-6 items-center justify-center rounded-full text-slate-500 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Plus className="h-3 w-3" />
@@ -259,7 +254,7 @@ export default function CartSheet({ open, onClose }: CartSheetProps) {
                           <button
                             type="button"
                             onClick={() => handleRemove(item)}
-                            disabled={!canRemove}
+                            disabled={!hasRemove}
                             className="inline-flex items-center gap-1 text-[11px] font-medium text-rose-600 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -284,7 +279,7 @@ export default function CartSheet({ open, onClose }: CartSheetProps) {
             </div>
 
             <div className="flex items-center justify-between gap-2">
-              {canClear && items.length > 0 && (
+              {hasClear && items.length > 0 && (
                 <button
                   type="button"
                   onClick={handleClear}

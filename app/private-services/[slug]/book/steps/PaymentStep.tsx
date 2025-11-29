@@ -1,4 +1,3 @@
-// app/private-services/[slug]/book/steps/PaymentStep.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -14,9 +13,11 @@ import {
   persistLastPayment,
   createRyftSessionApi,
   ensureRyftSdkLoaded,
+  markOrderPaidApi,
+  updateOrderApi,            // ✅ NEW
   type CartItem,
   type CartTotals,
-} from "@/lib/api"; // or "@/lib/api" if you merged helpers there
+} from "@/lib/api";
 
 type PaymentStepProps = {
   serviceSlug?: string;
@@ -25,20 +26,15 @@ type PaymentStepProps = {
 export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
   const search = useSearchParams();
 
-  // NOTE: in your cart-context you almost certainly have { items, clearCart }
-  // NOT { clearCartCart }, so we use `clearCart` here.
   const { items, clearCart } = useCart();
 
-  // ---- clearCart any stale payment flags on mount ----
+  // ---- clear any stale payment flags on mount ----
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      // Old stale state from previous checkouts
       window.localStorage.removeItem("last_payment");
       window.localStorage.removeItem("orders_dirty");
       window.localStorage.removeItem("clearCart_cart");
-      // Optional: clearCart any "cart clearCarted" markers to allow new flow
-      // window.sessionStorage.removeItem("cart-clearCarted:generic");
     } catch {
       // ignore
     }
@@ -51,7 +47,18 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
     return fromProp || fromQuery;
   }, [serviceSlug, search]);
 
-  // ---- Appointment ----
+  // ---- Order + appointment ----
+  const orderId = useMemo(() => {
+    const fromQuery = search?.get("order");
+    if (fromQuery) return fromQuery;
+    if (typeof window === "undefined") return null;
+    try {
+      return window.localStorage.getItem("order_id");
+    } catch {
+      return null;
+    }
+  }, [search]);
+
   const appointmentAtIso = search?.get("appointment_at") || null;
   const appointmentAtPretty = useMemo(() => {
     if (!appointmentAtIso) return null;
@@ -80,34 +87,67 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
     [totals.totalMinor]
   );
 
-  // ---- Reference code (stable for this render) ----
+  // ---- Reference code from slug ----
   const refCode = useMemo(
     () => makeRefFromSlug(effectiveSlug),
     [effectiveSlug]
   );
 
+  // ---- Payment reference (no orderRef; just orderId or refCode) ----
+  const paymentRef = useMemo(
+    () => (orderId ? String(orderId) : refCode),
+    [orderId, refCode]
+  );
+
   // ---- last_payment payload builder ----
   const buildLastPayment = () =>
     buildLastPaymentPayload(
-      refCode,
+      paymentRef,
       totals,
       effectiveSlug,
       appointmentAtIso
     );
 
   // -----------------------
+  // Tell backend: this order is still pending (for this step)
+  // -----------------------
+  useEffect(() => {
+    if (!orderId) return;
+    (async () => {
+      try {
+        await markOrderPaidApi(orderId, {
+          payment_status: "pending",
+        } as any);
+      } catch {
+        // ignore; order was probably already pending
+      }
+    })();
+  }, [orderId]);
+
+  // -----------------------
   // Test success (no real charge)
   // -----------------------
   const [testSubmitting, setTestSubmitting] = useState(false);
 
-  const onTestSuccess = () => {
+  const onTestSuccess = async () => {
     if (testSubmitting) return; // prevent double-click locally
     setTestSubmitting(true);
 
     const payload = buildLastPayment();
     persistLastPayment(payload);
 
-    // clearCart in-memory cart
+    // ✅ Just update the order's payment_status via updateOrderApi
+    if (orderId) {
+      try {
+        await updateOrderApi(orderId, {
+          payment_status: "paid",
+        } as any);
+      } catch {
+        // ignore failures here; we still redirect
+      }
+    }
+
+    // clear in-memory cart
     try {
       clearCart?.();
     } catch {
@@ -117,7 +157,7 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
     const base = `/private-services/${effectiveSlug}/book`;
     const u = new URL(base, window.location.origin);
     u.searchParams.set("step", "success");
-    u.searchParams.set("order", payload.ref);
+    u.searchParams.set("order", orderId || payload.ref);
     u.searchParams.set("slug", effectiveSlug);
     if (appointmentAtIso) {
       u.searchParams.set("appointment_at", appointmentAtIso);
@@ -166,7 +206,7 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
           amountMinor: totals.totalMinor,
           currency:
             process.env.NEXT_PUBLIC_CONSULTATION_CURRENCY || "GBP",
-          reference: refCode,
+          reference: paymentRef,
           description: "Clinic payment",
         });
 
@@ -236,7 +276,7 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
     return () => {
       cancelled = true;
     };
-  }, [totals.totalMinor, showPay, refCode]);
+  }, [totals.totalMinor, showPay, paymentRef]);
 
   // ---- Empty cart guard ----
   if (!totals.lines.length) {
@@ -369,51 +409,70 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
                 return;
               }
 
-              Ryft.attemptPayment({ clientSecret })
-                .then((paymentSession: any) => {
-                  if (
-                    paymentSession?.status === "Approved" ||
-                    paymentSession?.status === "Captured"
-                  ) {
-                    const payload = buildLastPayment();
-                    persistLastPayment(payload);
+              try {
+                const paymentSession = await Ryft.attemptPayment({
+                  clientSecret,
+                });
 
+                if (
+                  paymentSession?.status === "Approved" ||
+                  paymentSession?.status === "Captured"
+                ) {
+                  const payload = buildLastPayment();
+                  persistLastPayment(payload);
+
+                  // Mark order as paid (if we know it)
+                  if (orderId) {
                     try {
-                      clearCart?.();
+                      await markOrderPaidApi(orderId, {
+                        payment_status: "paid",
+                        payment_reference:
+                          paymentSession?.id ||
+                          paymentSession?.reference ||
+                          payload.ref,
+                        amountMinor: payload.totalMinor,
+                        provider: "ryft",
+                        raw: paymentSession,
+                      } as any);
                     } catch {
                       // ignore
                     }
+                  }
 
-                    const base = `/private-services/${effectiveSlug}/book`;
-                    const u = new URL(
-                      base,
-                      window.location.origin
+                  try {
+                    clearCart?.();
+                  } catch {
+                    // ignore
+                  }
+
+                  const base = `/private-services/${effectiveSlug}/book`;
+                  const u = new URL(base, window.location.origin);
+                  u.searchParams.set("step", "success");
+                  u.searchParams.set("order", orderId || payload.ref);
+                  u.searchParams.set("slug", effectiveSlug);
+                  if (appointmentAtIso) {
+                    u.searchParams.set(
+                      "appointment_at",
+                      appointmentAtIso
                     );
-                    u.searchParams.set("step", "success");
-                    u.searchParams.set("order", payload.ref);
-                    u.searchParams.set("slug", effectiveSlug);
-                    if (appointmentAtIso) {
-                      u.searchParams.set(
-                        "appointment_at",
-                        appointmentAtIso
-                      );
-                    }
-                    window.location.href =
-                      u.pathname + u.search + u.hash;
-                    return;
                   }
+                  window.location.href =
+                    u.pathname + u.search + u.hash;
+                  return;
+                }
 
-                  if (paymentSession?.lastError) {
-                    const msg =
-                      (window as any)?.Ryft?.getUserFacingErrorMessage?.(
-                        paymentSession.lastError
-                      );
-                    setError(msg || "Payment declined");
-                  }
-                })
-                .catch((err: any) =>
-                  setError(err?.message || "Payment failed")
-                );
+                if (paymentSession?.lastError) {
+                  const msg =
+                    (window as any)?.Ryft?.getUserFacingErrorMessage?.(
+                      paymentSession.lastError
+                    );
+                  setError(msg || "Payment declined");
+                } else {
+                  setError("Payment was not approved");
+                }
+              } catch (err: any) {
+                setError(err?.message || "Payment failed");
+              }
             }}
           >
             <button
