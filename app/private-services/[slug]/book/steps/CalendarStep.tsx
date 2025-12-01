@@ -22,7 +22,7 @@ import {
 } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
-/* Helpers to read ids + session + RAF answers + build order meta     */
+/* Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
 function resolveServiceId(
@@ -33,17 +33,15 @@ function resolveServiceId(
 
   const sch: any = schedule;
 
-  // Try different common shapes
   const fromSchedule =
-    sch.service_id || // plain field
+    sch.service_id ||
     sch.serviceId ||
     (sch.service && (sch.service._id || sch.service.id)) ||
-    sch.service || // sometimes raw id
+    sch.service ||
     null;
 
   if (fromSchedule) return String(fromSchedule);
 
-  // Fallback: see if any cart item has service_id linked
   for (const ci of cartItems as any[]) {
     const cid =
       ci.service_id ||
@@ -113,9 +111,7 @@ function readRafFormId(slug: string): string | null {
     if (v && v !== "undefined" && v !== "null") {
       return v;
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
   return null;
 }
 
@@ -199,8 +195,6 @@ function buildOrderMeta(opts: {
 
   const sessionId = getConsultationSessionId();
   const rafQA = buildRafQAFromStorage(opts.serviceSlug);
-
-  // ✅ get RAF form id that we stored in RAF step
   const rafFormId = readRafFormId(opts.serviceSlug);
 
   const meta: any = {
@@ -267,6 +261,12 @@ export default function CalendarBookingPage() {
   const [creatingAppointment, setCreatingAppointment] = useState(false);
   const [appointmentError, setAppointmentError] = useState<string | null>(null);
 
+  // ✅ NEW: success message + duplicate guard
+  const [appointmentSuccess, setAppointmentSuccess] = useState<string | null>(
+    null
+  );
+  const [hasCreatedAppointment, setHasCreatedAppointment] = useState(false);
+
   const minDate = useMemo(() => dateToYmd(new Date()), []);
   const maxDate = useMemo(() => dateToYmd(addDaysUtc(new Date(), 180)), []);
 
@@ -274,15 +274,8 @@ export default function CalendarBookingPage() {
     let value = e.target.value as string;
     if (!value) return;
 
-    // If user picks / types a past date, force it to today
-    if (value < minDate) {
-      value = minDate;
-    }
-
-    // Optional: clamp to maxDate for manual typing
-    if (value > maxDate) {
-      value = maxDate;
-    }
+    if (value < minDate) value = minDate;
+    if (value > maxDate) value = maxDate;
 
     setDate(value);
   };
@@ -343,7 +336,27 @@ export default function CalendarBookingPage() {
     setSlots(built);
     setDayMeta(meta);
     setSelectedIso(null);
+    setAppointmentError(null);
+    setAppointmentSuccess(null);
+    setHasCreatedAppointment(false);
   }, [schedule, date]);
+
+  // ✅ NEW: whenever user selects a slot, check if we've already created
+  // an appointment for this slug + datetime (stored in localStorage)
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!slug || !selectedIso) {
+      setHasCreatedAppointment(false);
+      return;
+    }
+    const key = `appointment_created.${slug}.${selectedIso}`;
+    try {
+      const v = localStorage.getItem(key);
+      setHasCreatedAppointment(v === "1");
+    } catch {
+      setHasCreatedAppointment(false);
+    }
+  }, [slug, selectedIso]);
 
   // ---- Calendar helpers ----
 
@@ -353,11 +366,8 @@ export default function CalendarBookingPage() {
       d.setDate(d.getDate() + delta);
       const next = dateToYmd(d);
 
-      // ⛔ block going into the past
       if (next < minDate) return prev;
-
-      // if you ever want to hard-limit future:
-      // if (next > maxDate) return prev;
+      if (next > maxDate) return prev;
 
       return next;
     });
@@ -370,6 +380,8 @@ export default function CalendarBookingPage() {
 
   function handleSelect(iso: string, label?: string) {
     setSelectedIso(iso);
+    setAppointmentError(null);
+    setAppointmentSuccess(null);
     persistAppointmentSelection(iso, {
       label,
       serviceSlug: slug,
@@ -380,6 +392,7 @@ export default function CalendarBookingPage() {
 
   async function handleContinue() {
     setAppointmentError(null);
+    setAppointmentSuccess(null);
 
     if (!selectedIso) {
       setAppointmentError("Please select an appointment time first.");
@@ -389,7 +402,6 @@ export default function CalendarBookingPage() {
       setAppointmentError("No schedule found for this service.");
       return;
     }
-
     if (!cartItems.length) {
       setAppointmentError(
         "Your basket is empty. Please add at least one treatment before booking."
@@ -397,7 +409,14 @@ export default function CalendarBookingPage() {
       return;
     }
 
-    // Logged-in user: prefer localStorage IDs, fallback to helper
+    // If we already created an appointment for this exact slot, block duplicates
+    if (hasCreatedAppointment) {
+      setAppointmentError(
+        "An appointment has already been created for this time."
+      );
+      return;
+    }
+
     const userIdFromLocal = readIdFromLocal([
       "user_id",
       "pe_user_id",
@@ -411,7 +430,6 @@ export default function CalendarBookingPage() {
       return;
     }
 
-    // Resolve service_id: first from localStorage, then from schedule/cart
     const serviceIdFromLocal = readIdFromLocal([
       "service_id",
       "pe_service_id",
@@ -424,7 +442,6 @@ export default function CalendarBookingPage() {
       setAppointmentError(
         "Missing service information for this booking. Please start again from the service page."
       );
-
       if (process.env.NODE_ENV !== "production") {
         console.log(
           "No service_id found in localStorage or schedule/cart. schedule:",
@@ -434,7 +451,6 @@ export default function CalendarBookingPage() {
       return;
     }
 
-    // Resolve schedule_id: prefer localStorage, then state
     const scheduleIdFromLocal = readIdFromLocal([
       "schedule_id",
       "pe_schedule_id",
@@ -466,7 +482,6 @@ export default function CalendarBookingPage() {
     const endDate = new Date(startDate.getTime() + slotMinutes * 60_000);
     const endIso = endDate.toISOString();
 
-    // Build order meta (cart + RAF + session)
     const meta = buildOrderMeta({
       cartItems,
       serviceSlug: slug,
@@ -474,7 +489,6 @@ export default function CalendarBookingPage() {
       appointmentIso: selectedIso,
     });
 
-    // Build order payload (NO reference sent from frontend)
     const orderPayload: any = {
       user_id: String(userId),
       service_id: String(serviceId),
@@ -501,9 +515,7 @@ export default function CalendarBookingPage() {
 
       try {
         localStorage.setItem("order_id", String(orderId));
-      } catch {
-        // ignore storage errors
-      }
+      } catch {}
 
       // 2) Create appointment linked to this order
       const appointmentPayload: CreateAppointmentPayload = {
@@ -526,7 +538,7 @@ export default function CalendarBookingPage() {
       const appointmentStart =
         appointment?.start_at || appointment?.startAt || selectedIso;
 
-      // 2b) ✅ Mark order as having an appointment booked
+      // Mark order as having an appointment booked
       try {
         await updateOrderApi(String(orderId), {
           is_appointment_booked: true,
@@ -538,7 +550,6 @@ export default function CalendarBookingPage() {
             err
           );
         }
-        // don't block user redirect on this
       }
 
       try {
@@ -549,9 +560,17 @@ export default function CalendarBookingPage() {
             "appointment_start_at",
             String(appointmentStart)
           );
-      } catch {
-        // ignore
-      }
+
+        // ✅ store "created" flag for this exact slot to prevent duplicate entries
+        const key = `appointment_created.${slug}.${appointmentStart}`;
+        localStorage.setItem(key, "1");
+        setHasCreatedAppointment(true);
+      } catch {}
+
+      // ✅ show success message
+      setAppointmentSuccess(
+        "Appointment booked successfully. Redirecting to payment…"
+      );
 
       const qp = new URLSearchParams();
       qp.set("step", "payment");
@@ -682,6 +701,13 @@ export default function CalendarBookingPage() {
           </div>
         )}
 
+        {/* ✅ Success banner */}
+        {appointmentSuccess && (
+          <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">
+            {appointmentSuccess}
+          </div>
+        )}
+
         {/* Slots */}
         <div className="mt-6">
           {loading ? (
@@ -728,7 +754,6 @@ export default function CalendarBookingPage() {
                     }
                   >
                     <div className="font-medium p-3">{s.time}</div>
-                  
                   </button>
                 );
               })}
@@ -749,6 +774,11 @@ export default function CalendarBookingPage() {
                       timeStyle: "short",
                     })}
                   </span>
+                  {hasCreatedAppointment && (
+                    <span className="ml-2 text-emerald-600 font-medium">
+                      • Appointment already created for this time
+                    </span>
+                  )}
                 </>
               ) : (
                 "No time selected yet."
@@ -757,14 +787,20 @@ export default function CalendarBookingPage() {
             <button
               type="button"
               onClick={handleContinue}
-              disabled={creatingAppointment || !selectedIso}
+              disabled={
+                creatingAppointment || !selectedIso || hasCreatedAppointment
+              }
               className={`inline-flex items-center rounded-full px-5 py-2 text-sm font-semibold text-white shadow-sm ${
-                creatingAppointment || !selectedIso
+                creatingAppointment || !selectedIso || hasCreatedAppointment
                   ? "bg-emerald-300 cursor-not-allowed opacity-80"
                   : "bg-emerald-600 hover:bg-emerald-700"
               }`}
             >
-              {creatingAppointment ? "Booking…" : "Book appointment"}
+              {creatingAppointment
+                ? "Booking…"
+                : hasCreatedAppointment
+                ? "Appointment created"
+                : "Book appointment"}
             </button>
           </div>
         )}

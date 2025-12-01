@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import Script from "next/script";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useCart } from "@/components/cart/cart-context";
 
 import {
@@ -14,7 +14,7 @@ import {
   createRyftSessionApi,
   ensureRyftSdkLoaded,
   markOrderPaidApi,
-  updateOrderApi,            // ✅ NEW
+  updateOrderApi, // ✅ used for test success
   type CartItem,
   type CartTotals,
 } from "@/lib/api";
@@ -25,6 +25,7 @@ type PaymentStepProps = {
 
 export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
   const search = useSearchParams();
+  const router = useRouter();
 
   const { items, clearCart } = useCart();
 
@@ -136,7 +137,7 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
     const payload = buildLastPayment();
     persistLastPayment(payload);
 
-    // ✅ Just update the order's payment_status via updateOrderApi
+    // ✅ update the order's payment_status via updateOrderApi
     if (orderId) {
       try {
         await updateOrderApi(orderId, {
@@ -147,11 +148,16 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
       }
     }
 
-    // clear in-memory cart
-    try {
-      clearCart?.();
-    } catch {
-      // ignore
+    // NOTE: intentionally NOT clearing the cart here,
+    // so you can still show the success page again for testing.
+
+    // let the success step know it should send user to home (not first step)
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem("after_success_redirect", "home");
+      } catch {
+        // ignore
+      }
     }
 
     const base = `/private-services/${effectiveSlug}/book`;
@@ -163,7 +169,7 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
       u.searchParams.set("appointment_at", appointmentAtIso);
     }
 
-    window.location.href = u.pathname + u.search + u.hash;
+    router.push(u.pathname + u.search + u.hash);
   };
 
   // =========================
@@ -439,10 +445,23 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
                     }
                   }
 
+                  // In real payment flow we still clear the cart
                   try {
                     clearCart?.();
                   } catch {
                     // ignore
+                  }
+
+                  // same redirect behaviour flag as test success
+                  if (typeof window !== "undefined") {
+                    try {
+                      window.localStorage.setItem(
+                        "after_success_redirect",
+                        "home"
+                      );
+                    } catch {
+                      // ignore
+                    }
                   }
 
                   const base = `/private-services/${effectiveSlug}/book`;
