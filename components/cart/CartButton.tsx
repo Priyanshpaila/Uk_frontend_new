@@ -217,7 +217,7 @@ function CartSheet({
               {formatMoney(subtotalMinor)}
             </span>
           </div>
-          <button
+          {/* <button
             type="button"
             disabled={items.length === 0}
             className="flex w-full items-center justify-center gap-2 rounded-full bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
@@ -228,7 +228,7 @@ function CartSheet({
           <p className="mt-2 text-[11px] text-slate-500">
             You&apos;ll confirm your appointment time and complete payment on
             the next step.
-          </p>
+          </p> */}
         </div>
       </div>
     </div>

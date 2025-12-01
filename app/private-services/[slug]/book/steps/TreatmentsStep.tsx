@@ -225,16 +225,16 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
           <h3 className="text-base font-semibold leading-snug text-slate-900 sm:text-lg">
             {item.name}
           </h3>
-          {item.sku && (
+          {/* {item.sku && (
             <span className="mt-0.5 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
               {item.sku}
             </span>
-          )}
+          )} */}
         </div>
 
         {selectedVariation && (
           <p className="text-[11px] text-slate-500">
-            Selected dose:{" "}
+            Selected variant:{" "}
             <span className="font-medium text-slate-700">
               {selectedVariation.title}
             </span>
@@ -251,14 +251,14 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
       {/* Price row */}
       <div className="mb-4 flex items-baseline justify-between">
         <div className="flex flex-col gap-0.5">
-          {hasMultipleVariations && item.baseFromPrice && (
+          {/* {hasMultipleVariations && item.baseFromPrice && (
             <span className="text-[11px] text-slate-400">
               From{" "}
               <span className="font-semibold text-emerald-600">
                 £{item.baseFromPrice.toFixed(2)}
               </span>
             </span>
-          )}
+          )} */}
           <div className="flex items-baseline gap-1">
             <span className="text-xl font-semibold text-emerald-600 sm:text-2xl">
               £{priceToShow.toFixed(2)}
@@ -278,7 +278,7 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
       {hasVariations && (
         <div className="mb-3">
           <label className="mb-1 block text-[11px] font-medium text-slate-600">
-            Select dose
+            Select variant
           </label>
           <select
             className="w-full rounded-2xl border border-slate-300 bg-slate-50/70 px-3 py-2 text-sm text-slate-900 shadow-inner focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
@@ -292,11 +292,7 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
             ))}
           </select>
 
-          <p className="mt-1 text-[10px] text-slate-500">
-            Min {minQty}
-            {maxQty != null && maxQty > 0 ? ` · Max ${maxQty}` : ""} · In
-            stock {stockQty}
-          </p>
+       
         </div>
       )}
 
