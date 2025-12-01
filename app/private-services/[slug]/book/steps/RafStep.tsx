@@ -1096,28 +1096,7 @@ export default function RafStep() {
                     <span>{currentSectionTitle}</span>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSectionIdx((i) => Math.max(0, i - 1))}
-                      disabled={sectionIdx === 0}
-                      className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-                    >
-                      Previous section
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setSectionIdx((i) =>
-                          Math.min(sections.order.length - 1, i + 1)
-                        )
-                      }
-                      disabled={sectionIdx >= sections.order.length - 1}
-                      className="rounded-full border border-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"
-                    >
-                      Next section
-                    </button>
-                  </div>
+
                 </div>
               )}
 
@@ -1153,6 +1132,28 @@ export default function RafStep() {
             </div>
 
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSectionIdx((i) => Math.max(0, i - 1))}
+                  disabled={sectionIdx === 0}
+                  className="rounded-full border  border-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                >
+                  Previous section
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSectionIdx((i) =>
+                      Math.min(sections.order.length - 1, i + 1)
+                    )
+                  }
+                  disabled={sectionIdx >= sections.order.length - 1}
+                  className="rounded-full border bg-emerald-500 border-slate-200 px-3 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-40"
+                >
+                  Next section
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={onSubmit}
