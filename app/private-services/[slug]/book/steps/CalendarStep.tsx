@@ -19,6 +19,9 @@ import {
   resolveUserIdFromStorage,
   type CreateAppointmentPayload,
   buildRafQAFromStorage,
+  // 🔹 NEW IMPORTS
+  fetchBookedSlotsApi,
+  type BookedSlotsResponse,
 } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
@@ -267,6 +270,11 @@ export default function CalendarBookingPage() {
   );
   const [hasCreatedAppointment, setHasCreatedAppointment] = useState(false);
 
+  // ✅ NEW: booked slots from backend for selected date
+  const [bookedSlots, setBookedSlots] = useState<BookedSlotsResponse | null>(
+    null
+  );
+
   const minDate = useMemo(() => dateToYmd(new Date()), []);
   const maxDate = useMemo(() => dateToYmd(addDaysUtc(new Date(), 180)), []);
 
@@ -323,7 +331,7 @@ export default function CalendarBookingPage() {
     };
   }, [slug]);
 
-  // 2) Build slots when schedule or date changes
+  // 2) Build base slots (opening hours) when schedule or date changes
   useEffect(() => {
     if (!schedule) {
       setSlots([]);
@@ -341,7 +349,37 @@ export default function CalendarBookingPage() {
     setHasCreatedAppointment(false);
   }, [schedule, date]);
 
-  // ✅ NEW: whenever user selects a slot, check if we've already created
+  // 3) 🔹 Fetch booked slots for this schedule + date
+  useEffect(() => {
+    if (!scheduleId || !date) {
+      setBookedSlots(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function run() {
+      try {
+        const data = await fetchBookedSlotsApi(String(scheduleId), date);
+        if (cancelled) return;
+        setBookedSlots(data);
+      } catch (err) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("Failed to load booked slots", err);
+        }
+        if (!cancelled) {
+          setBookedSlots(null);
+        }
+      }
+    }
+
+    run();
+    return () => {
+      cancelled = true;
+    };
+  }, [scheduleId, date]);
+
+  // ✅ Whenever user selects a slot, check if we've already created
   // an appointment for this slug + datetime (stored in localStorage)
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -497,6 +535,7 @@ export default function CalendarBookingPage() {
       end_at: endIso,
       meta,
       payment_status: "pending",
+      order_type: "new", // 🔹 explicitly send "new"
     };
 
     if (process.env.NODE_ENV !== "production") {
@@ -728,7 +767,25 @@ export default function CalendarBookingPage() {
             <div className="grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-6 mt-2">
               {slots.map((s) => {
                 const isSelected = selectedIso === s.start_at;
-                const isDisabled = !s.available || s.remaining <= 0;
+
+                // 🔹 Find matching booked slot from backend by time (e.g. "09:00")
+                const bookedForTime =
+                  bookedSlots?.slots?.find((b) => b.time === s.time) || null;
+
+                const isFullFromApi =
+                  !!bookedForTime &&
+                  (bookedForTime.is_full ||
+                    (typeof bookedForTime.count === "number" &&
+                      typeof bookedSlots?.capacity === "number" &&
+                      bookedForTime.count >= bookedSlots.capacity));
+
+                // Disable if:
+                // - slot is in the past OR
+                // - remaining <= 0 from base schedule OR
+                // - backend says this time is fully booked
+                const isDisabled =
+                  !s.available || s.remaining <= 0 || isFullFromApi;
+
                 return (
                   <button
                     key={s.start_at}
@@ -753,7 +810,14 @@ export default function CalendarBookingPage() {
                         : "Select this time"
                     }
                   >
-                    <div className="font-medium p-3">{s.time}</div>
+                    <div className="font-medium p-3">
+                      {s.time}
+                      {isFullFromApi && (
+                        <span className="ml-1 text-[10px] text-rose-500">
+                          (Full)
+                        </span>
+                      )}
+                    </div>
                   </button>
                 );
               })}

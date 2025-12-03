@@ -336,11 +336,7 @@ export async function getLoggedInUserApi(): Promise<LoggedInUser> {
 
   const loggedInUser: LoggedInUser = {
     _id: raw._id ?? raw.id ?? "",
-    firstName:
-      raw.firstName ??
-      raw.first_name ??
-      firstFromName ??
-      "",
+    firstName: raw.firstName ?? raw.first_name ?? firstFromName ?? "",
     lastName:
       raw.lastName ??
       raw.last_name ??
@@ -356,8 +352,7 @@ export async function getLoggedInUserApi(): Promise<LoggedInUser> {
       raw.address_line2 ?? raw.address2 ?? raw.address_line_2 ?? "",
     city: raw.city ?? "",
     county: raw.county ?? raw.state ?? "",
-    postalcode:
-      raw.postalcode ?? raw.postcode ?? raw.zip ?? "",
+    postalcode: raw.postalcode ?? raw.postcode ?? raw.zip ?? "",
     country: raw.country ?? "United Kingdom",
 
     createdAt: raw.createdAt,
@@ -406,10 +401,7 @@ export async function updatePatientApi(
   }
 
   // combined "name" field for older schemas
-  if (
-    payload.firstName !== undefined ||
-    payload.lastName !== undefined
-  ) {
+  if (payload.firstName !== undefined || payload.lastName !== undefined) {
     const first = payload.firstName ?? "";
     const last = payload.lastName ?? "";
     const name = `${first} ${last}`.trim();
@@ -530,15 +522,26 @@ export type CreateOrderPayload = {
   end_at: string;
   meta?: OrderMeta;
   payment_status?: string;
+  order_type?: string; // 🔹 NEW (optional, defaults to "new")
 };
 
 export async function createOrderApi(
   payload: CreateOrderPayload
 ): Promise<OrderDto> {
   const base = getBackendBase();
+
+  // 🔹 Ensure we always send order_type: "new" by default
+  const bodyToSend: any = {
+    ...payload,
+  };
+
+  if (!bodyToSend.order_type) {
+    bodyToSend.order_type = "new";
+  }
+
   return jsonFetch<OrderDto>(`${base}/orders`, {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(bodyToSend),
   });
 }
 
@@ -664,9 +667,7 @@ type BackendServiceDetail = BackendService & {
 /**
  * GET /services/slug/:slug
  */
-export async function fetchServiceBySlug(
-  slug: string
-): Promise<ServiceDetail> {
+export async function fetchServiceBySlug(slug: string): Promise<ServiceDetail> {
   const base = getBackendBase();
 
   const raw = await jsonFetch<BackendServiceDetail>(
@@ -722,12 +723,12 @@ export async function fetchServiceBySlug(
 // Variation as it comes from backend
 export type MedicineVariationDto = {
   title: string;
-  price: number;      // assumed in major units (e.g. 12.5 => £12.50)
+  price: number; // assumed in major units (e.g. 12.5 => £12.50)
   stock: number;
   min_qty?: number;
   max_qty?: number;
   sort_order?: number;
-  status?: string;    // "published" | "draft" | "active" etc.
+  status?: string; // "published" | "draft" | "active" etc.
 };
 
 export type ServiceMedicineDto = {
@@ -737,8 +738,8 @@ export type ServiceMedicineDto = {
   slug?: string;
   description?: string;
   image?: string;
-  status?: string | null;           // "published", "draft", etc.
-  price_from?: number;              // lowest variation price
+  status?: string | null; // "published", "draft", etc.
+  price_from?: number; // lowest variation price
   max_bookable_quantity?: number;
   allow_reorder?: boolean;
   is_virtual?: boolean;
@@ -790,7 +791,6 @@ export function buildMediaUrl(imagePath?: string | null): string {
   if (imagePath.startsWith("/")) return `${origin}${imagePath}`;
   return `${origin}/${imagePath}`;
 }
-
 
 /* ------------------------------------------------------------------ */
 /*                            RAF / Clinic Forms                      */
@@ -868,8 +868,6 @@ export async function fetchRafFormForService(
     schema: bestSchema,
   };
 }
-
-
 
 /* ------------------------------------------------------------------ */
 /*                  Consultation session + RAF answers                */
@@ -1069,8 +1067,7 @@ export async function fetchScheduleForServiceSlug(
 
   const list: Schedule[] = Array.isArray(raw) ? raw : raw.data || [];
 
-  const match =
-    list.find((s) => s.service_slug === serviceSlug) || list[0];
+  const match = list.find((s) => s.service_slug === serviceSlug) || list[0];
 
   if (!match) {
     throw new Error("No schedule configured for this service yet.");
@@ -1095,10 +1092,17 @@ export async function fetchScheduleForServiceSlug(
   return match;
 }
 
-
 // ---- Slot building logic (pure) ----
 
-const CAL_DAY_MAP: WeekDay[] = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const CAL_DAY_MAP: WeekDay[] = [
+  "sun",
+  "mon",
+  "tue",
+  "wed",
+  "thu",
+  "fri",
+  "sat",
+];
 
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
@@ -1354,10 +1358,7 @@ export function buildRafQAFromStorage(slug: string): any[] {
   if (!answers) return [];
 
   // 🔥 Try to read label map written by RafStep
-  let labelMap: Record<
-    string,
-    { label?: string; key?: string }
-  > | null = null;
+  let labelMap: Record<string, { label?: string; key?: string }> | null = null;
 
   if (typeof window !== "undefined") {
     try {
@@ -1379,11 +1380,12 @@ export function buildRafQAFromStorage(slug: string): any[] {
     const friendlyKey = meta?.key || fieldKey;
     const questionLabel = meta?.label || fieldKey; // fallback if no labels stored
 
-    const answer =
-      Array.isArray(value) ? value.map((v) => String(v)).join(", ") : String(value);
+    const answer = Array.isArray(value)
+      ? value.map((v) => String(v)).join(", ")
+      : String(value);
 
     out.push({
-      key: friendlyKey,      // e.g. "meds_current"
+      key: friendlyKey, // e.g. "meds_current"
       question: questionLabel, // e.g. "Are you on any current medications?"
       answer,
       raw: value,
@@ -1392,7 +1394,6 @@ export function buildRafQAFromStorage(slug: string): any[] {
 
   return out;
 }
-
 
 export function resolveUserIdFromStorage(
   currentUser?: { _id?: string } | null
@@ -1404,9 +1405,6 @@ export function resolveUserIdFromStorage(
   return null;
 }
 
-
-
-
 /* ------------------------------------------------------------------ */
 /*                          Cart + payments                           */
 /* ------------------------------------------------------------------ */
@@ -1415,11 +1413,11 @@ export type CartItem = {
   sku: string;
   name: string;
   qty: number;
-  price?: number;      // in pounds
+  price?: number; // in pounds
   priceMinor?: number; // in minor units (pence)
   unitMinor?: number;
   totalMinor?: number;
-  label?: string;      // variation label
+  label?: string; // variation label
 };
 
 export type CartTotals = {
@@ -1440,8 +1438,8 @@ export type LastPaymentItem = {
 
 export type LastPaymentPayload = {
   ref: string;
-  amountMinor: number;   // canonical field
-  totalMinor?: number;   // alias for convenience
+  amountMinor: number; // canonical field
+  totalMinor?: number; // alias for convenience
   ts: number;
   slug: string;
   appointment_at: string | null;
@@ -1533,10 +1531,7 @@ export function toMinor(val: any): number {
 /* ------------------------------------------------------------------ */
 
 export function normalisePaymentItem(raw: any): LastPaymentItem {
-  const qty = Math.max(
-    1,
-    Number(raw?.qty) || Number(raw?.quantity) || 1
-  );
+  const qty = Math.max(1, Number(raw?.qty) || Number(raw?.quantity) || 1);
 
   let variation: string | null =
     (raw?.variations ??
@@ -1546,14 +1541,12 @@ export function normalisePaymentItem(raw: any): LastPaymentItem {
       raw?.label ??
       raw?.strength ??
       raw?.dose ??
-      null) || null;
+      null) ||
+    null;
 
   let name =
-    (raw?.product?.name ||
-      raw?.baseName ||
-      raw?.name ||
-      raw?.title ||
-      "Item") + "";
+    (raw?.product?.name || raw?.baseName || raw?.name || raw?.title || "Item") +
+    "";
   name = name.trim();
 
   const sku = (raw?.sku || raw?.slug || raw?.id || "item") + "";
@@ -1575,9 +1568,7 @@ export function normalisePaymentItem(raw: any): LastPaymentItem {
       0
   );
   const totalMinor =
-    typeof raw?.totalMinor === "number"
-      ? raw.totalMinor
-      : unitMinor * qty;
+    typeof raw?.totalMinor === "number" ? raw.totalMinor : unitMinor * qty;
 
   return {
     sku,
@@ -1602,11 +1593,8 @@ export function mergePaymentItemsFromSources(
   const last = cart.length
     ? lastRaw.filter((r) => {
         const sku = String(r?.sku || "");
-        const variations = String(
-          r?.variations ?? r?.variation ?? ""
-        );
-        const looksCombined =
-          sku === "item" || variations.includes(" • ");
+        const variations = String(r?.variations ?? r?.variation ?? "");
+        const looksCombined = sku === "item" || variations.includes(" • ");
         return !looksCombined;
       })
     : lastRaw;
@@ -1672,14 +1660,10 @@ export function buildLastPaymentPayload(
   };
 }
 
-
 export function persistLastPayment(payload: LastPaymentPayload) {
   try {
     if (typeof window === "undefined") return;
-    window.localStorage.setItem(
-      "last_payment",
-      JSON.stringify(payload)
-    );
+    window.localStorage.setItem("last_payment", JSON.stringify(payload));
     window.localStorage.setItem("orders_dirty", "1");
     window.localStorage.setItem("clear_cart", "1");
   } catch {
@@ -1724,10 +1708,7 @@ export async function createRyftSessionApi(params: {
   const friendly = (s: string) => {
     if (!s) return "";
     const trimmed = s.trim();
-    if (
-      trimmed.startsWith("<!DOCTYPE") ||
-      trimmed.startsWith("<html")
-    ) {
+    if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
       return "Could not create payment session (404). Is /api/pay/ryft/session implemented and reachable?";
     }
     return trimmed.slice(0, 400);
@@ -1735,7 +1716,10 @@ export async function createRyftSessionApi(params: {
 
   if (!res.ok) {
     const msg = friendly(
-      data?.detail || data?.message || text || "Could not create payment session"
+      data?.detail ||
+        data?.message ||
+        text ||
+        "Could not create payment session"
     );
     throw new Error(msg);
   }
@@ -1823,8 +1807,7 @@ export function buildLocalOrderPreview(params: {
       strength: i.variations ?? null,
       qty: i.qty,
       unitMinor: i.unitMinor,
-      totalMinor:
-        i.totalMinor ?? i.unitMinor * Math.max(1, i.qty || 1),
+      totalMinor: i.totalMinor ?? i.unitMinor * Math.max(1, i.qty || 1),
     })),
   };
 }
@@ -1833,12 +1816,10 @@ export function storeLocalOrderPreview(order: any) {
   try {
     if (typeof window === "undefined") return;
     const key = "local_orders";
-    const prev: any[] =
-      safeParseJson(window.localStorage.getItem(key)) || [];
+    const prev: any[] = safeParseJson(window.localStorage.getItem(key)) || [];
     const refKey = String(order.reference || order.id || "");
     const dedup = (Array.isArray(prev) ? prev : []).filter(
-      (p) =>
-        String(p?.reference || p?.id || "") !== refKey
+      (p) => String(p?.reference || p?.id || "") !== refKey
     );
     const next = [order, ...dedup].slice(0, 5);
     window.localStorage.setItem(key, JSON.stringify(next));
@@ -1888,13 +1869,9 @@ export async function postPendingOrderOnce(
 /**
  * Backend call: GET /account/orders/by-ref/:ref
  */
-export async function fetchOrderByReferenceApi(
-  ref: string
-): Promise<any> {
+export async function fetchOrderByReferenceApi(ref: string): Promise<any> {
   const base = getBackendBase(); // includes /api
-  const url = `${base}/account/orders/by-ref/${encodeURIComponent(
-    ref
-  )}`;
+  const url = `${base}/account/orders/by-ref/${encodeURIComponent(ref)}`;
   const token =
     typeof window !== "undefined"
       ? window.localStorage.getItem("session_token") || ""
@@ -1947,7 +1924,7 @@ export type CreateAppointmentPayload = {
   service_id: string;
   schedule_id: string;
   start_at: string; // ISO string: "2025-11-26T14:30:00.000Z"
-  end_at: string;   // ISO string
+  end_at: string; // ISO string
   join_url?: string; // optional – can be provided or generated server-side
   host_url?: string; // optional
 };
@@ -1967,6 +1944,43 @@ export type AppointmentDto = {
   updatedAt?: string;
   [key: string]: any;
 };
+
+/* ---------- NEW: booked slots types + API ---------- */
+
+export type BookedSlotInfo = {
+  time: string; // "09:00"
+  count: number; // how many appointments booked for that time
+  is_full: boolean;
+};
+
+export type BookedSlotsResponse = {
+  schedule_id: string;
+  date: string; // "YYYY-MM-DD"
+  capacity: number; // per-slot capacity from backend
+  slots: BookedSlotInfo[];
+};
+
+/**
+ * GET /appointments/booked-slots?schedule_id=...&date=YYYY-MM-DD
+ */
+export async function fetchBookedSlotsApi(
+  scheduleId: string,
+  date: string
+): Promise<BookedSlotsResponse> {
+  const base = getBackendBase(); // e.g. http://localhost:8000/api
+
+  const params = new URLSearchParams({
+    schedule_id: scheduleId,
+    date,
+  });
+
+  return jsonFetch<BookedSlotsResponse>(
+    `${base}/appointments/booked-slots?${params.toString()}`,
+    {
+      method: "GET",
+    }
+  );
+}
 
 /**
  * POST /appointments
