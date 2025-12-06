@@ -4,38 +4,58 @@ import { useState } from "react";
 import Container from "@/components/ui/Container";
 import { Plus, Minus } from "lucide-react";
 
-const FAQS = [
+type FAQItem = { q: string; a: string };
+
+type FAQData = {
+  heading?: string;
+  items?: FAQItem[];
+  footerText?: string;
+  footerLinkLabel?: string;
+  footerLinkHref?: string;
+};
+
+const DEFAULT_FAQS: FAQItem[] = [
   {
     q: "Why are weight loss treatment prices changing?",
-    a: "Medication and supply costs can change based on manufacturer pricing and availability. We always display the most up to date prices before you complete your order."
+    a: "Medication and supply costs can change based on manufacturer pricing and availability. We always display the most up to date prices before you complete your order.",
   },
   {
     q: "Can I switch weight loss treatments?",
-    a: "This will depend on your medical history and prescriber assessment. Our clinical team will review your consultation and recommend suitable options."
+    a: "This will depend on your medical history and prescriber assessment. Our clinical team will review your consultation and recommend suitable options.",
   },
   {
     q: "Is my information safe?",
-    a: "Yes. We use industry-standard encryption and follow strict data protection laws to keep your information secure."
+    a: "Yes. We use industry-standard encryption and follow strict data protection laws to keep your information secure.",
   },
   {
     q: "Will my delivery be discreet?",
-    a: "Absolutely. All orders are sent in plain, unbranded packaging with no reference to the contents."
-  }
+    a: "Absolutely. All orders are sent in plain, unbranded packaging with no reference to the contents.",
+  },
 ];
 
-export default function FAQSection() {
+export default function FAQSection({ data }: { data?: FAQData }) {
   const [openIndex, setOpenIndex] = useState<number | null>(0);
+
+  const heading =
+    data?.heading ?? "Frequently Asked Questions";
+  const items =
+    data?.items && data.items.length > 0 ? data.items : DEFAULT_FAQS;
+
+  const footerText = data?.footerText ?? "More questions?";
+  const footerLinkLabel =
+    data?.footerLinkLabel ?? "Visit our help centre";
+  const footerLinkHref = data?.footerLinkHref ?? "#contact";
 
   return (
     <section id="faq" className="bg-white py-10 md:py-12">
       <Container>
         <div className="mb-6 text-center">
           <h2 className="text-xl font-semibold text-slate-900 md:text-2xl">
-            Frequently Asked Questions
+            {heading}
           </h2>
         </div>
         <div className="space-y-2">
-          {FAQS.map((item, idx) => {
+          {items.map((item, idx) => {
             const open = openIndex === idx;
             return (
               <div
@@ -65,7 +85,13 @@ export default function FAQSection() {
         </div>
 
         <p className="mt-4 text-center text-xs text-slate-500">
-          More questions? <a href="#contact" className="text-cyan-700 underline">Visit our help centre</a>
+          {footerText}{" "}
+          <a
+            href={footerLinkHref}
+            className="text-cyan-700 underline"
+          >
+            {footerLinkLabel}
+          </a>
         </p>
       </Container>
     </section>

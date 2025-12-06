@@ -1994,3 +1994,71 @@ export async function createAppointmentApi(
     body: JSON.stringify(payload),
   });
 }
+
+
+/* ------------------------------------------------------------------ */
+/*                     Dynamic storefront home page                    */
+/* ------------------------------------------------------------------ */
+export type DynamicNavbarContent = {
+  logoUrl?: string;
+  logoAlt?: string;
+  searchPlaceholder?: string;
+  navLinks?: {
+    label: string;
+    href: string;
+    external?: boolean;
+  }[];
+};
+
+export type DynamicFooterContent = {
+  brandName?: string;
+  brandDescription?: string;
+  infoLinks?: { label: string; href: string }[];
+  contact?: {
+    phoneLabel?: string;
+    emailLabel?: string;
+    addressLabel?: string;
+  };
+  bottomLeft?: string;
+  bottomRight?: string;
+};
+
+export type DynamicHomePageContent = {
+  slug: string;
+
+  // These match the sections we defined in NestJS
+  navbar?: Record<string, any>;
+  hero?: Record<string, any>;
+  safeSecure?: Record<string, any>;
+  keyBenefits?: Record<string, any>;
+  faq?: Record<string, any>;
+  contact?: Record<string, any>;
+  testimonials?: Record<string, any>;
+  footer?: Record<string, any>;
+
+  // allow extra custom sections in future
+  [key: string]: any;
+};
+
+
+/**
+ * GET /dynamicHomePages/:slug
+ * Public endpoint for the storefront (dynamic UI content).
+ *
+ * Example:
+ *   const home = await fetchDynamicHomePage();       // slug "home"
+ *   const wm   = await fetchDynamicHomePage("wm");   // slug "wm"
+ */
+export async function fetchDynamicHomePage(
+  slug: string = "home"
+): Promise<DynamicHomePageContent> {
+  // uses tenant-aware base: http://tenant.../api
+  return apiFetch<DynamicHomePageContent>(
+    `/dynamicHomePages/${encodeURIComponent(slug)}`,
+    {
+      method: "GET",
+      // don't cache so admin changes show immediately
+      cache: "no-store",
+    }
+  );
+}

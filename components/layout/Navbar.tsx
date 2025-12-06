@@ -1,30 +1,31 @@
+// components/layout/Navbar.tsx
 "use client";
 
 import { useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import Container from "@/components/ui/Container";
-import {
-  Search,
-  ChevronDown,
-  Menu,
-  X,
-  User,
-} from "lucide-react";
+import { Search, ChevronDown, Menu, X, User } from "lucide-react";
 import { useAuth } from "@/components/auth/AuthProvider";
-import CartButton from "@/components/cart/CartButton"; // 👈 NEW
+import CartButton from "@/components/cart/CartButton";
+import type { DynamicNavbarContent } from "@/lib/api";
 
-const navLinks = [
+const DEFAULT_NAV_LINKS = [
   { label: "NHS Services", href: "#nhs" },
   { label: "Private Services", href: "#services" },
   {
     label: "WhatsApp",
     href: "https://api.whatsapp.com/message/S3W272ZN4QM7O1?autoload=1&app_absent=0",
+    external: true,
   },
   { label: "Help & Support", href: "#faq" },
 ];
 
-export default function Navbar() {
+type NavbarProps = {
+  data?: DynamicNavbarContent | null;
+};
+
+export default function Navbar({ data }: NavbarProps) {
   const router = useRouter();
   const { user, clearAuth } = useAuth();
   const [open, setOpen] = useState(false);
@@ -43,6 +44,21 @@ export default function Navbar() {
     "U"
   ).toUpperCase();
 
+  // 🔹 Dynamic bits with fallbacks
+  const logoUrl = data?.logoUrl ?? "/logo.png";
+  const logoAlt = data?.logoAlt ?? "Pharmacy Express logo";
+  const searchPlaceholder =
+    data?.searchPlaceholder ??
+    "Search for treatments e.g. weight loss, migraines";
+
+  const links =
+    data?.navLinks && data.navLinks.length > 0
+      ? data.navLinks
+      : DEFAULT_NAV_LINKS;
+
+  const isExternal = (href: string, external?: boolean) =>
+    external || href.startsWith("http");
+
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/80 backdrop-blur-xl">
       <Container>
@@ -50,8 +66,8 @@ export default function Navbar() {
           {/* Logo */}
           <a href="/" className="flex items-center gap-2">
             <Image
-              src="/logo.png"
-              alt="Pharmacy Express logo"
+              src={logoUrl}
+              alt={logoAlt}
               width={150}
               height={40}
               className="h-8 w-auto md:h-9"
@@ -64,7 +80,7 @@ export default function Navbar() {
               <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
                 type="search"
-                placeholder="Search for treatments e.g. weight loss, migraines"
+                placeholder={searchPlaceholder}
                 className="w-full rounded-full border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-xs text-slate-800 placeholder:text-slate-400 focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-cyan-100"
               />
             </div>
@@ -74,23 +90,26 @@ export default function Navbar() {
           <div className="flex items-center gap-2 md:gap-3">
             {/* Desktop nav */}
             <nav className="hidden items-center gap-4 text-xs font-medium text-slate-700 lg:flex">
-              {navLinks.map((item) => (
-                <a
-                  key={item.label}
-                  href={item.href}
-                  target={item.href.startsWith("http") ? "_blank" : undefined}
-                  rel={item.href.startsWith("http") ? "noreferrer" : undefined}
-                  className="inline-flex items-center gap-1 transition hover:text-cyan-700"
-                >
-                  {item.label}
-                  {item.label.includes("Services") && (
-                    <ChevronDown className="h-3 w-3 text-slate-400" />
-                  )}
-                </a>
-              ))}
+              {links.map((item) => {
+                const external = isExternal(item.href, item.external);
+                return (
+                  <a
+                    key={item.label}
+                    href={item.href}
+                    target={external ? "_blank" : undefined}
+                    rel={external ? "noreferrer" : undefined}
+                    className="inline-flex items-center gap-1 transition hover:text-cyan-700"
+                  >
+                    {item.label}
+                    {item.label.includes("Services") && (
+                      <ChevronDown className="h-3 w-3 text-slate-400" />
+                    )}
+                  </a>
+                );
+              })}
             </nav>
 
-            {/* Cart button with bottom sheet / right drawer */}
+            {/* Cart button */}
             <CartButton />
 
             {/* Desktop account: login OR avatar */}
@@ -161,24 +180,27 @@ export default function Navbar() {
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
                   type="search"
-                  placeholder="Search for treatments"
+                  placeholder={searchPlaceholder || "Search for treatments"}
                   className="w-full rounded-full border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-xs text-slate-800 placeholder:text-slate-400 focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-cyan-100"
                 />
               </div>
             </div>
             <nav className="flex flex-col gap-1 rounded-3xl border border-slate-200 bg-white p-3 text-sm text-slate-700 shadow-soft-card">
-              {navLinks.map((item) => (
-                <a
-                  key={item.label}
-                  href={item.href}
-                  target={item.href.startsWith("http") ? "_blank" : undefined}
-                  rel={item.href.startsWith("http") ? "noreferrer" : undefined}
-                  className="rounded-2xl px-2 py-2 hover:bg-slate-50"
-                  onClick={() => setOpen(false)}
-                >
-                  {item.label}
-                </a>
-              ))}
+              {links.map((item) => {
+                const external = isExternal(item.href, item.external);
+                return (
+                  <a
+                    key={item.label}
+                    href={item.href}
+                    target={external ? "_blank" : undefined}
+                    rel={external ? "noreferrer" : undefined}
+                    className="rounded-2xl px-2 py-2 hover:bg-slate-50"
+                    onClick={() => setOpen(false)}
+                  >
+                    {item.label}
+                  </a>
+                );
+              })}
 
               {/* Mobile account actions */}
               {!user ? (

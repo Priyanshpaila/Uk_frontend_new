@@ -2,13 +2,93 @@ import Image from "next/image";
 import Container from "@/components/ui/Container";
 import BadgePill from "@/components/ui/BadgePill";
 
-export default function Hero() {
+type HeroData = {
+  backgroundImage?: string;
+  kicker?: string;
+  titlePrefix?: string;
+  titleHighlight?: string;
+  titleSuffix?: string;
+  description?: string;
+  topPillText?: string;
+  topPillSub?: string;
+  primaryCta?: { label: string; href: string };
+  secondaryCta?: { label: string; href: string };
+  trustBadge?: string;
+  trustText?: string;
+  chips?: string[];
+  rightBadgeMain?: string;
+  rightBadgeSub?: string;
+  rightDescription?: string;
+  stats?: { label: string; value: string }[];
+  rightFeatureChips?: string[];
+};
+
+export default function Hero({ data }: { data?: HeroData }) {
+  const bg = data?.backgroundImage ?? "/images/hero.jpg";
+
+  const kicker =
+    data?.kicker ?? "Pharmacy Express Weight Management";
+  const titlePrefix = data?.titlePrefix ?? "Lose up to";
+  const titleHighlight =
+    data?.titleHighlight ?? "22.5% of your body weight";
+  const titleSuffix =
+    data?.titleSuffix ?? "with clinically proven programmes.";
+
+  const description =
+    data?.description ??
+    "Expert weight loss support from UK-trained prescribers, with discreet delivery straight to your door.";
+
+  const topPillText =
+    data?.topPillText ?? "Pharmacy Express · Weight management clinic";
+  const topPillSub =
+    data?.topPillSub ?? "UK-based, GPhC-registered pharmacy";
+
+  const primaryCta = data?.primaryCta ?? {
+    label: "Start consultation",
+    href: "/consultation",
+  };
+  const secondaryCta = data?.secondaryCta ?? {
+    label: "Reorder",
+    href: "/reorder",
+  };
+
+  const trustBadge = data?.trustBadge ?? "★ 4.9 Trustpilot";
+  const trustText =
+    data?.trustText ?? "Rated excellent by our patients";
+
+  const chips =
+    data?.chips ??
+    [
+      "GPhC registered · UK professionals",
+      "Clinically proven treatments",
+      "Discreet & secure service",
+    ];
+
+  const stats =
+    data?.stats ??
+    [
+      { label: "Patients", value: "10k+" },
+      { label: "Rating", value: "4.9" },
+      { label: "Nationwide", value: "UK" },
+    ];
+
+  const rightBadgeMain =
+    data?.rightBadgeMain ?? "Pharmacy-led programme";
+  const rightBadgeSub = data?.rightBadgeSub ?? "Licensed clinic";
+  const rightDescription =
+    data?.rightDescription ??
+    "Personalised weight management, monitored by UK-registered pharmacists.";
+
+  const rightFeatureChips =
+    data?.rightFeatureChips ??
+    ["24h appointments", "Discreet delivery", "Ongoing review"];
+
   return (
     <section className="relative isolate overflow-hidden">
       {/* Background image */}
       <div className="absolute inset-0">
         <Image
-          src="/images/hero.jpg"
+          src={bg}
           alt="Pharmacy weight management banner"
           fill
           priority
@@ -25,10 +105,8 @@ export default function Hero() {
         <div className="relative py-10 md:py-20">
           {/* Top pill */}
           <div className="mb-6 flex flex-wrap items-center gap-3 text-[11px] text-slate-100/80">
-            <BadgePill>Pharmacy Express · Weight management clinic</BadgePill>
-            <span className="hidden md:inline-block">
-              UK-based, GPhC-registered pharmacy
-            </span>
+            <BadgePill>{topPillText}</BadgePill>
+            <span className="hidden md:inline-block">{topPillSub}</span>
           </div>
 
           {/* Main hero content */}
@@ -36,55 +114,53 @@ export default function Hero() {
             {/* LEFT: headline + CTAs */}
             <div className="max-w-xl text-slate-50">
               <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-200">
-                Pharmacy Express Weight Management
+                {kicker}
               </p>
 
               <h1 className="mt-3 text-balance text-3xl font-semibold leading-tight sm:text-4xl md:text-5xl lg:text-[2.9rem]">
-                Lose up to{" "}
+                {titlePrefix}{" "}
                 <span className="text-emerald-400">
-                  22.5% of your body weight
+                  {titleHighlight}
                 </span>{" "}
-                with clinically proven programmes.
+                {titleSuffix}
               </h1>
 
               <p className="mt-4 max-w-md text-sm text-slate-100/85 md:text-base">
-                Expert weight loss support from UK-trained prescribers, with
-                discreet delivery straight to your door.
+                {description}
               </p>
 
               {/* Primary CTAs */}
               <div className="mt-6 flex flex-wrap items-center gap-3">
-                <button
-                  type="button"
+                <a
+                  href={primaryCta.href}
                   className="rounded-full bg-emerald-500 px-6 py-2.5 text-xs font-semibold text-white shadow-soft-card shadow-emerald-500/30 transition hover:-translate-y-0.5 hover:bg-emerald-600"
                 >
-                  Start consultation
-                </button>
-                <button
-                  type="button"
+                  {primaryCta.label}
+                </a>
+                <a
+                  href={secondaryCta.href}
                   className="rounded-full border border-cyan-200/70 bg-white/90 px-6 py-2.5 text-xs font-semibold text-slate-900 shadow-sm transition hover:-translate-y-0.5 hover:border-cyan-400 hover:bg-white"
                 >
-                  Reorder
-                </button>
+                  {secondaryCta.label}
+                </a>
                 <div className="flex items-center gap-2 text-[11px] text-cyan-100/90">
                   <span className="inline-flex h-5 items-center rounded-full bg-emerald-500/20 px-2 text-[10px] font-medium text-emerald-200">
-                    ★ 4.9 Trustpilot
+                    {trustBadge}
                   </span>
-                  <span>Rated excellent by our patients</span>
+                  <span>{trustText}</span>
                 </div>
               </div>
 
               {/* Key reassurance chips */}
               <div className="mt-7 flex flex-wrap gap-2 text-[11px] text-slate-100/90">
-                <span className="inline-flex items-center rounded-full bg-slate-950/60 px-3 py-1.5 ring-1 ring-white/10 backdrop-blur">
-                  GPhC registered · UK professionals
-                </span>
-                <span className="inline-flex items-center rounded-full bg-slate-950/60 px-3 py-1.5 ring-1 ring-white/10 backdrop-blur">
-                  Clinically proven treatments
-                </span>
-                <span className="inline-flex items-center rounded-full bg-slate-950/60 px-3 py-1.5 ring-1 ring-white/10 backdrop-blur">
-                  Discreet & secure service
-                </span>
+                {chips.map((chip) => (
+                  <span
+                    key={chip}
+                    className="inline-flex items-center rounded-full bg-slate-950/60 px-3 py-1.5 ring-1 ring-white/10 backdrop-blur"
+                  >
+                    {chip}
+                  </span>
+                ))}
               </div>
             </div>
 
@@ -98,55 +174,44 @@ export default function Hero() {
                   {/* Header row */}
                   <div className="flex items-center justify-between gap-2">
                     <span className="rounded-full bg-slate-950/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-50/90 ring-1 ring-white/15">
-                      Pharmacy-led programme
+                      {rightBadgeMain}
                     </span>
                     <span className="rounded-full bg-emerald-400/20 px-2 py-1 text-[10px] font-semibold text-emerald-100 ring-1 ring-emerald-300/50">
-                      Licensed clinic
+                      {rightBadgeSub}
                     </span>
                   </div>
 
                   {/* One-line description */}
                   <p className="text-[12px] font-medium text-slate-50 md:text-sm">
-                    Personalised weight management, monitored by UK-registered
-                    pharmacists.
+                    {rightDescription}
                   </p>
 
                   {/* Stats row */}
                   <div className="grid grid-cols-3 gap-2 text-center text-[10px] text-slate-100/85">
-                    <div className="rounded-2xl bg-white/10 px-2 py-2 ring-1 ring-white/15 backdrop-blur-sm">
-                      <p className="text-sm font-semibold text-white">
-                        10k+
-                      </p>
-                      <p>Patients</p>
-                    </div>
-                    <div className="rounded-2xl bg-white/10 px-2 py-2 ring-1 ring-white/15 backdrop-blur-sm">
-                      <p className="text-sm font-semibold text-white">
-                        4.9
-                      </p>
-                      <p>Rating</p>
-                    </div>
-                    <div className="rounded-2xl bg-white/10 px-2 py-2 ring-1 ring-white/15 backdrop-blur-sm">
-                      <p className="text-sm font-semibold text-white">
-                        UK
-                      </p>
-                      <p>Nationwide</p>
-                    </div>
+                    {stats.map((s) => (
+                      <div
+                        key={s.label}
+                        className="rounded-2xl bg-white/10 px-2 py-2 ring-1 ring-white/15 backdrop-blur-sm"
+                      >
+                        <p className="text-sm font-semibold text-white">
+                          {s.value}
+                        </p>
+                        <p>{s.label}</p>
+                      </div>
+                    ))}
                   </div>
 
-                  {/* Tiny feature chips instead of full sentences */}
+                  {/* Tiny feature chips */}
                   <div className="flex flex-wrap gap-2 text-[10px] text-slate-100/85">
-                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-950/40 px-2.5 py-1 ring-1 ring-white/10 backdrop-blur-sm">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                      24h appointments
-                    </span>
-                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-950/40 px-2.5 py-1 ring-1 ring-white/10 backdrop-blur-sm">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                      Discreet delivery
-                    </span>
-                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-950/40 px-2.5 py-1 ring-1 ring-white/10 backdrop-blur-sm">
-                      <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
-                      Ongoing review
-                    </span>
+                    {rightFeatureChips.map((chip) => (
+                      <span
+                        key={chip}
+                        className="inline-flex items-center gap-1 rounded-full bg-slate-950/40 px-2.5 py-1 ring-1 ring-white/10 backdrop-blur-sm"
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-300" />
+                        {chip}
+                      </span>
+                    ))}
                   </div>
                 </div>
               </div>

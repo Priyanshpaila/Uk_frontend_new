@@ -1,17 +1,52 @@
+// components/layout/Footer.tsx
 import Container from "@/components/ui/Container";
+import type { DynamicFooterContent } from "@/lib/api";
 
-export default function Footer() {
+type FooterProps = {
+  data?: DynamicFooterContent | null;
+};
+
+export default function Footer({ data }: FooterProps) {
+  const brandName = data?.brandName ?? "Pharmacy Express";
+  const brandDescription =
+    data?.brandDescription ??
+    "Experience personalised confidential care with our private pharmacy services tailored to your unique needs.";
+
+  const infoLinks =
+    data?.infoLinks && data.infoLinks.length > 0
+      ? data.infoLinks
+      : [
+          { label: "About us", href: "/about" },
+          { label: "Contact us", href: "/contact" },
+          { label: "Terms & conditions", href: "/terms" },
+          { label: "Privacy policy", href: "/privacy" },
+        ];
+
+  const phoneLabel =
+    data?.contact?.phoneLabel ?? "Phone: 01924 971414";
+  const emailLabel =
+    data?.contact?.emailLabel ??
+    "Email: info@pharmacy-express.co.uk";
+  const addressLabel =
+    data?.contact?.addressLabel ?? "Address: Your pharmacy address";
+
+  const bottomLeft =
+    data?.bottomLeft ??
+    `© ${new Date().getFullYear()} Pharmacy Express. All rights reserved.`;
+  const bottomRight =
+    data?.bottomRight ??
+    "GPhC registered pharmacy. This website does not replace medical advice.";
+
   return (
     <footer className="border-t border-slate-200 bg-white py-8 text-xs text-slate-600">
       <Container>
         <div className="grid gap-6 md:grid-cols-4">
           <div className="md:col-span-2">
             <h3 className="text-sm font-semibold text-slate-900">
-              Pharmacy Express
+              {brandName}
             </h3>
             <p className="mt-2 max-w-sm text-xs text-slate-500">
-              Experience personalised confidential care with our private 
-              pharmacy services tailored to your unique needs.
+              {brandDescription}
             </p>
           </div>
           <div>
@@ -19,10 +54,16 @@ export default function Footer() {
               Information
             </h4>
             <ul className="space-y-1">
-              <li>About us</li>
-              <li>Contact us</li>
-              <li>Terms & conditions</li>
-              <li>Privacy policy</li>
+              {infoLinks.map((link) => (
+                <li key={link.label}>
+                  <a
+                    href={link.href}
+                    className="hover:text-cyan-700 hover:underline"
+                  >
+                    {link.label}
+                  </a>
+                </li>
+              ))}
             </ul>
           </div>
           <div>
@@ -30,15 +71,15 @@ export default function Footer() {
               Contact
             </h4>
             <ul className="space-y-1">
-              <li>Phone: 01924 971414</li>
-              <li>Email: info@pharmacy-express.co.uk</li>
-              <li>Address: Your pharmacy address</li>
+              <li>{phoneLabel}</li>
+              <li>{emailLabel}</li>
+              <li>{addressLabel}</li>
             </ul>
           </div>
         </div>
         <div className="mt-6 flex flex-col items-start justify-between gap-3 border-t border-slate-200 pt-4 text-[11px] text-slate-500 md:flex-row md:items-center">
-          <p>© {new Date().getFullYear()} Pharmacy Express. All rights reserved.</p>
-          <p>GPhC registered pharmacy. This website does not replace medical advice.</p>
+          <p>{bottomLeft}</p>
+          <p>{bottomRight}</p>
         </div>
       </Container>
     </footer>

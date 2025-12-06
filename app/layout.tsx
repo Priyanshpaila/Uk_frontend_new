@@ -8,6 +8,11 @@ import { AuthProvider } from "@/components/auth/AuthProvider";
 import { CartProvider } from "@/components/cart/cart-context";
 import { Toaster } from "react-hot-toast";
 
+import {
+  fetchDynamicHomePage,
+  type DynamicHomePageContent,
+} from "@/lib/api";
+
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
@@ -18,11 +23,19 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  let pageContent: DynamicHomePageContent | null = null;
+
+  try {
+    pageContent = await fetchDynamicHomePage("home");
+  } catch (e) {
+    console.error("Failed to fetch dynamic home page:", e);
+  }
+
   return (
     <html lang="en">
       <body
@@ -30,9 +43,10 @@ export default function RootLayout({
       >
         <AuthProvider>
           <CartProvider>
-            <Navbar />
+            {/* pass navbar + footer content down */}
+            <Navbar data={pageContent?.navbar} />
             <main className="flex-1">{children}</main>
-            <Footer />
+            <Footer data={pageContent?.footer} />
             <Toaster position="top-right" />
           </CartProvider>
         </AuthProvider>
