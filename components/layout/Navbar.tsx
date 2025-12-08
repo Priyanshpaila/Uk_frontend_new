@@ -50,11 +50,24 @@ export default function Navbar({ data }: NavbarProps) {
   const [open, setOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
 
-  const handleLogout = () => {
-    clearAuth();
-    setAccountOpen(false);
-    router.push("/");
-  };
+const handleLogout = () => {
+  // clear your auth context/state
+  clearAuth();
+
+  // clear all browser storage
+  if (typeof window !== "undefined") {
+    try {
+      window.localStorage.clear();      // 🔹 clears whole localStorage
+      window.sessionStorage.clear();   // 🔹 optional, but usually useful
+    } catch (err) {
+      console.error("Failed to clear storage on logout", err);
+    }
+  }
+
+  setAccountOpen(false);
+  router.push("/");
+};
+
 
   const userInitial = (
     user?.firstName?.[0] ||

@@ -2078,3 +2078,69 @@ export async function fetchDynamicHomePage(
     }
   );
 }
+
+
+/* ------------------------------------------------------------------ */
+/*                             Email send API                         */
+/* ------------------------------------------------------------------ */
+
+export type SendEmailPayload = {
+  to: string;
+  subject: string;
+  template: string; // e.g. "welcome"
+  context?: Record<string, any>;
+  attachments?: File[]; // optional multiple files
+};
+
+export type SendEmailResult = {
+  success?: boolean;
+  message?: string;
+  [key: string]: any;
+};
+
+export async function sendEmailApi(
+  payload: SendEmailPayload
+): Promise<SendEmailResult> {
+  const base = getBackendBase();
+  const tokenHeader = getAuthHeader();
+
+  const fd = new FormData();
+
+  fd.append("to", payload.to);
+  fd.append("subject", payload.subject);
+  fd.append("template", payload.template);
+
+  if (payload.context) {
+    // backend expects text – send JSON string like in Postman
+    fd.append("context", JSON.stringify(payload.context));
+  }
+
+  if (payload.attachments && payload.attachments.length) {
+    // same field name for each file: "attachments"
+    for (const file of payload.attachments) {
+      fd.append("attachments", file);
+    }
+  }
+
+  const res = await fetch(`${base}/email/send`, {
+    method: "POST",
+    headers: {
+      // ❗ DO NOT set Content-Type; browser will set multipart boundary
+      ...tokenHeader,
+    },
+    body: fd,
+  });
+
+  let data: any = {};
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
+  }
+
+  if (!res.ok) {
+    throw new Error(data?.message || `Email send failed (${res.status})`);
+  }
+
+  return data as SendEmailResult;
+}
