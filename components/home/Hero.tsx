@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Container from "@/components/ui/Container";
 import BadgePill from "@/components/ui/BadgePill";
+import { getBackendBase } from "@/lib/api"; // 👈 keep this
 
 type HeroData = {
   backgroundImage?: string;
@@ -23,14 +24,38 @@ type HeroData = {
   rightFeatureChips?: string[];
 };
 
-export default function Hero({ data }: { data?: HeroData }) {
-  const bg = data?.backgroundImage ?? "/images/hero.jpg";
+// 🔹 Only prepend backend for real backend uploads (/upload/**)
+//    Static public assets like /images/hero.jpg or /logo.png stay as-is.
+const resolveImageUrl = (imagePath?: string | null) => {
+  if (!imagePath) return "/images/hero.jpg";
 
-  const kicker =
-    data?.kicker ?? "Pharmacy Express Weight Management";
+  // full external URL
+  if (/^https?:\/\//i.test(imagePath)) {
+    return imagePath;
+  }
+
+  const normalizedPath = imagePath.startsWith("/")
+    ? imagePath
+    : `/${imagePath}`;
+
+  // Public assets served by Next (no backend prefix)
+  if (!normalizedPath.startsWith("/upload")) {
+    return normalizedPath;
+  }
+
+  // Backend uploads (e.g. /upload/pages/xyz.png)
+  const baseWithApi = getBackendBase();
+  const cleanBase = baseWithApi.replace(/\/api\/?$/, "");
+
+  return `${cleanBase}${normalizedPath}`;
+};
+
+export default function Hero({ data }: { data?: HeroData }) {
+  const bgSrc = resolveImageUrl(data?.backgroundImage);
+
+  const kicker = data?.kicker ?? "Pharmacy Express Weight Management";
   const titlePrefix = data?.titlePrefix ?? "Lose up to";
-  const titleHighlight =
-    data?.titleHighlight ?? "22.5% of your body weight";
+  const titleHighlight = data?.titleHighlight ?? "22.5% of your body weight";
   const titleSuffix =
     data?.titleSuffix ?? "with clinically proven programmes.";
 
@@ -53,42 +78,41 @@ export default function Hero({ data }: { data?: HeroData }) {
   };
 
   const trustBadge = data?.trustBadge ?? "★ 4.9 Trustpilot";
-  const trustText =
-    data?.trustText ?? "Rated excellent by our patients";
+  const trustText = data?.trustText ?? "Rated excellent by our patients";
 
   const chips =
-    data?.chips ??
-    [
+    data?.chips ?? [
       "GPhC registered · UK professionals",
       "Clinically proven treatments",
       "Discreet & secure service",
     ];
 
   const stats =
-    data?.stats ??
-    [
+    data?.stats ?? [
       { label: "Patients", value: "10k+" },
       { label: "Rating", value: "4.9" },
       { label: "Nationwide", value: "UK" },
     ];
 
-  const rightBadgeMain =
-    data?.rightBadgeMain ?? "Pharmacy-led programme";
+  const rightBadgeMain = data?.rightBadgeMain ?? "Pharmacy-led programme";
   const rightBadgeSub = data?.rightBadgeSub ?? "Licensed clinic";
   const rightDescription =
     data?.rightDescription ??
     "Personalised weight management, monitored by UK-registered pharmacists.";
 
   const rightFeatureChips =
-    data?.rightFeatureChips ??
-    ["24h appointments", "Discreet delivery", "Ongoing review"];
+    data?.rightFeatureChips ?? [
+      "24h appointments",
+      "Discreet delivery",
+      "Ongoing review",
+    ];
 
   return (
     <section className="relative isolate overflow-hidden">
       {/* Background image */}
       <div className="absolute inset-0">
         <Image
-          src={bg}
+          src={bgSrc}
           alt="Pharmacy weight management banner"
           fill
           priority
@@ -111,7 +135,7 @@ export default function Hero({ data }: { data?: HeroData }) {
 
           {/* Main hero content */}
           <div className="grid items-center gap-10 md:grid-cols-[minmax(0,1.45fr)_minmax(0,1fr)]">
-            {/* LEFT: headline + CTAs */}
+            {/* LEFT */}
             <div className="max-w-xl text-slate-50">
               <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-cyan-200">
                 {kicker}
@@ -119,9 +143,7 @@ export default function Hero({ data }: { data?: HeroData }) {
 
               <h1 className="mt-3 text-balance text-3xl font-semibold leading-tight sm:text-4xl md:text-5xl lg:text-[2.9rem]">
                 {titlePrefix}{" "}
-                <span className="text-emerald-400">
-                  {titleHighlight}
-                </span>{" "}
+                <span className="text-emerald-400">{titleHighlight}</span>{" "}
                 {titleSuffix}
               </h1>
 
@@ -129,7 +151,7 @@ export default function Hero({ data }: { data?: HeroData }) {
                 {description}
               </p>
 
-              {/* Primary CTAs */}
+              {/* CTAs */}
               <div className="mt-6 flex flex-wrap items-center gap-3">
                 <a
                   href={primaryCta.href}
@@ -151,7 +173,7 @@ export default function Hero({ data }: { data?: HeroData }) {
                 </div>
               </div>
 
-              {/* Key reassurance chips */}
+              {/* Chips */}
               <div className="mt-7 flex flex-wrap gap-2 text-[11px] text-slate-100/90">
                 {chips.map((chip) => (
                   <span
@@ -164,14 +186,11 @@ export default function Hero({ data }: { data?: HeroData }) {
               </div>
             </div>
 
-            {/* RIGHT: glass card – simplified */}
+            {/* RIGHT glass card */}
             <div className="flex justify-end">
               <div className="relative w-full max-w-md overflow-hidden rounded-4xl bg-white/10 p-4 text-[11px] text-slate-100 shadow-soft-card shadow-slate-950/40 ring-1 ring-white/15 backdrop-blur-2xl md:p-5">
-                {/* glass glow */}
                 <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-white/35 via-white/10 to-emerald-300/15 opacity-90" />
-
                 <div className="relative space-y-4">
-                  {/* Header row */}
                   <div className="flex items-center justify-between gap-2">
                     <span className="rounded-full bg-slate-950/40 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-50/90 ring-1 ring-white/15">
                       {rightBadgeMain}
@@ -181,12 +200,10 @@ export default function Hero({ data }: { data?: HeroData }) {
                     </span>
                   </div>
 
-                  {/* One-line description */}
                   <p className="text-[12px] font-medium text-slate-50 md:text-sm">
                     {rightDescription}
                   </p>
 
-                  {/* Stats row */}
                   <div className="grid grid-cols-3 gap-2 text-center text-[10px] text-slate-100/85">
                     {stats.map((s) => (
                       <div
@@ -201,7 +218,6 @@ export default function Hero({ data }: { data?: HeroData }) {
                     ))}
                   </div>
 
-                  {/* Tiny feature chips */}
                   <div className="flex flex-wrap gap-2 text-[10px] text-slate-100/85">
                     {rightFeatureChips.map((chip) => (
                       <span

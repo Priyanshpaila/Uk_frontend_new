@@ -10,7 +10,6 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import {
   fetchServiceBySlug,
   type ServiceDetail,
-  resolveUserIdFromStorage, // ✅ still used just for login state
 } from "@/lib/api";
 import toast from "react-hot-toast";
 import { useCart } from "@/components/cart/cart-context";
@@ -134,17 +133,8 @@ export default function BookServicePage() {
 
   const { user } = useAuth();
 
-  // 🔑 unified user-id resolution (context + localStorage)
-  const [resolvedUserId, setResolvedUserId] = React.useState<string | null>(
-    null
-  );
-
-  React.useEffect(() => {
-    const id = resolveUserIdFromStorage(user as any);
-    setResolvedUserId(id);
-  }, [user]);
-
-  const isLoggedIn = !!user || !!resolvedUserId;
+  // 🔐 "Logged in" is now *only* based on AuthProvider user state
+  const isLoggedIn = !!user;
 
   // Cart info for gating + summary (raw, from context)
   const cart = useCart() as any;
@@ -176,65 +166,6 @@ export default function BookServicePage() {
   );
   const [currentStep, setCurrentStep] =
     React.useState<StepKey>("treatments");
-
-  // 🔄 Restore current step from localStorage when page loads
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!slug) return;
-
-    try {
-      const raw = window.localStorage.getItem(STEP_STORAGE_KEY(slug));
-      if (!raw) return;
-
-      const allSteps: StepKey[] = [
-        "treatments",
-        "login",
-        "raf",
-        "calendar",
-        "payment",
-        "success",
-      ];
-      if (!allSteps.includes(raw as StepKey)) return;
-
-      let step = raw as StepKey;
-
-      // If user is logged in, skip "login" step
-      if (step === "login" && isLoggedIn) {
-        const idxInBase = BASE_FLOW.indexOf("login");
-        step = (BASE_FLOW[idxInBase + 1] ?? "treatments") as StepKey;
-      }
-
-      // Ensure this step exists in the current flow
-      if (!flow.includes(step)) {
-        step = "treatments";
-      }
-
-      setCurrentStep(step);
-    } catch {
-      // ignore
-    }
-  }, [slug, isLoggedIn, flow]);
-
-  // 💾 Persist current step whenever it changes
-  React.useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!slug) return;
-    try {
-      window.localStorage.setItem(STEP_STORAGE_KEY(slug), currentStep);
-    } catch {
-      // ignore
-    }
-  }, [slug, currentStep]);
-
-  const currentIndex = React.useMemo(() => {
-    const idx = flow.indexOf(currentStep);
-    return idx >= 0 ? idx : 0;
-  }, [flow, currentStep]);
-
-  const nextStep: StepKey | null =
-    currentIndex < flow.length - 1 ? flow[currentIndex + 1] : null;
-  const prevStep: StepKey | null =
-    currentIndex > 0 ? flow[currentIndex - 1] : null;
 
   /* ---------- Load service detail (by slug) & store service_id locally ----- */
 
@@ -275,6 +206,73 @@ export default function BookServicePage() {
       cancelled = true;
     };
   }, [slug]);
+
+  /* ---------- Restore current step from localStorage on mount ---------- */
+
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!slug) return;
+
+    try {
+      const raw = window.localStorage.getItem(STEP_STORAGE_KEY(slug));
+      if (!raw) return;
+
+      const allSteps: StepKey[] = [
+        "treatments",
+        "login",
+        "raf",
+        "calendar",
+        "payment",
+        "success",
+      ];
+
+      if (!allSteps.includes(raw as StepKey)) return;
+
+      let step = raw as StepKey;
+
+      // If user is logged in, never land on login step
+      if (isLoggedIn && step === "login") {
+        const idxInBase = BASE_FLOW.indexOf("login");
+        step = (BASE_FLOW[idxInBase + 1] ?? "treatments") as StepKey;
+      }
+
+      // If NOT logged in and we previously stored a later step,
+      // force them back to the login step
+      if (!isLoggedIn && step !== "treatments" && step !== "login") {
+        step = "login";
+      }
+
+      // Ensure this step exists in the current flow (login can be removed)
+      if (!flow.includes(step)) {
+        step = "treatments";
+      }
+
+      setCurrentStep(step);
+    } catch {
+      // ignore
+    }
+  }, [slug, isLoggedIn, flow]);
+
+  // 💾 Persist current step whenever it changes
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!slug) return;
+    try {
+      window.localStorage.setItem(STEP_STORAGE_KEY(slug), currentStep);
+    } catch {
+      // ignore
+    }
+  }, [slug, currentStep]);
+
+  const currentIndex = React.useMemo(() => {
+    const idx = flow.indexOf(currentStep);
+    return idx >= 0 ? idx : 0;
+  }, [flow, currentStep]);
+
+  const nextStep: StepKey | null =
+    currentIndex < flow.length - 1 ? flow[currentIndex + 1] : null;
+  const prevStep: StepKey | null =
+    currentIndex > 0 ? flow[currentIndex - 1] : null;
 
   // If user becomes logged in while on "login" step, jump forward
   React.useEffect(() => {

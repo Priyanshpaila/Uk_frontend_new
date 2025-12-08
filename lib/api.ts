@@ -566,6 +566,22 @@ export async function updateOrderApi(
   });
 }
 
+/**
+ * GET /orders/:id
+ * Example: http://localhost:8000/api/orders/693671185a2bf42054669227
+ */
+export async function getOrderByIdApi(orderId: string): Promise<OrderDto> {
+  const base = getBackendBase();
+
+  // use GET (jsonFetch already adds auth headers etc.)
+  return jsonFetch<OrderDto>(
+    `${base}/orders/${encodeURIComponent(orderId)}`,
+    {
+      method: "GET",
+    }
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*                               PAGES                                */
 /* ------------------------------------------------------------------ */

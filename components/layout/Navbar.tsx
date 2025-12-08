@@ -9,6 +9,7 @@ import { Search, ChevronDown, Menu, X, User } from "lucide-react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import CartButton from "@/components/cart/CartButton";
 import type { DynamicNavbarContent } from "@/lib/api";
+import { getBackendBase } from "@/lib/api"; // 👈 NEW
 
 const DEFAULT_NAV_LINKS = [
   { label: "NHS Services", href: "#nhs" },
@@ -20,6 +21,24 @@ const DEFAULT_NAV_LINKS = [
   },
   { label: "Help & Support", href: "#faq" },
 ];
+
+// 👇 helper to normalise backend/static image URLs
+const resolveImageUrl = (imagePath?: string | null) => {
+  if (!imagePath) return "";
+
+  // already an absolute URL – return as is
+  if (/^https?:\/\//i.test(imagePath)) {
+    return imagePath;
+  }
+
+  const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
+
+  // get backend base (e.g. https://tenant.domain/api) and strip /api
+  const baseWithApi = getBackendBase();
+  const cleanBase = baseWithApi.replace(/\/api\/?$/, "");
+
+  return `${cleanBase}${normalizedPath}`;
+};
 
 type NavbarProps = {
   data?: DynamicNavbarContent | null;
@@ -59,6 +78,9 @@ export default function Navbar({ data }: NavbarProps) {
   const isExternal = (href: string, external?: boolean) =>
     external || href.startsWith("http");
 
+  // 🔹 Resolve logo through backend-aware helper
+  const logoSrc = resolveImageUrl(logoUrl || "/logo.png");
+
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/80 backdrop-blur-xl">
       <Container>
@@ -66,7 +88,7 @@ export default function Navbar({ data }: NavbarProps) {
           {/* Logo */}
           <a href="/" className="flex items-center gap-2">
             <Image
-              src={logoUrl}
+              src={logoSrc || "/logo.png"} // final fallback just in case
               alt={logoAlt}
               width={150}
               height={40}
