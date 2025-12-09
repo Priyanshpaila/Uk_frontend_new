@@ -136,9 +136,6 @@ const handleLogout = () => {
                     className="inline-flex items-center gap-1 transition hover:text-cyan-700"
                   >
                     {item.label}
-                    {item.label.includes("Services") && (
-                      <ChevronDown className="h-3 w-3 text-slate-400" />
-                    )}
                   </a>
                 );
               })}

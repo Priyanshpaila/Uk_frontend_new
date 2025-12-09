@@ -2144,3 +2144,85 @@ export async function sendEmailApi(
 
   return data as SendEmailResult;
 }
+
+
+/* ------------------------------------------------------------------ */
+/*                          NHS register API                          */
+/* ------------------------------------------------------------------ */
+
+export type NhsRegisterPayload = {
+  first_name: string;
+  last_name: string;
+  dob: string; // "YYYY-MM-DD"
+  gender: string;
+  nhs_number?: string;
+
+  email: string;
+  phone: string;
+
+  address: string;
+  address1?: string;
+  address2?: string;
+  city: string;
+  postcode: string;
+  country: string;
+
+  use_alt_delivery?: boolean;
+  delivery_address?: string;
+  delivery_address1?: string;
+  delivery_address2?: string;
+  delivery_city?: string;
+  delivery_postcode?: string;
+  delivery_country?: string;
+
+  exemption: string; // e.g. "age_60_plus"
+  exemption_number?: string;
+  exemption_expiry?: string; // "YYYY-MM-DD"
+
+  consent_patient: boolean;
+  consent_nomination: boolean;
+  consent_nomination_explained: boolean;
+  consent_exemption_signed: boolean;
+  consent_scr_access: boolean;
+
+  meta?: Record<string, any>;
+};
+
+export type NhsRegisterResult = {
+  ok?: boolean;
+  message?: string;
+  [key: string]: any;
+};
+
+/**
+ * POST /nhsService
+ * Body shape:
+ * {
+ *   first_name, last_name, dob, gender, nhs_number,
+ *   email, phone,
+ *   address, address1, address2, city, postcode, country,
+ *   use_alt_delivery, delivery_address, ...,
+ *   exemption, exemption_number, exemption_expiry,
+ *   consent_patient, consent_nomination, consent_nomination_explained,
+ *   consent_exemption_signed, consent_scr_access,
+ *   meta
+ * }
+ */
+export async function nhsRegisterApi(
+  payload: NhsRegisterPayload
+): Promise<NhsRegisterResult> {
+  const base = getBackendBase();
+
+  const bodyToSend: NhsRegisterPayload = {
+    ...payload,
+    meta: {
+      source: payload.meta?.source ?? "navbar_nhs_modal",
+      ...payload.meta,
+    },
+  };
+
+  return jsonFetch<NhsRegisterResult>(`${base}/nhsService`, {
+    method: "POST",
+    body: JSON.stringify(bodyToSend),
+  });
+}
