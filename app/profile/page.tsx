@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation"; // ⬅️ add this
 import Container from "@/components/ui/Container";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { getLoggedInUserApi, type LoggedInUser } from "@/lib/api";
@@ -13,7 +14,16 @@ type TabId = "profile" | "orders" | "reorders";
 
 export default function ProfilePage() {
   const { user, token, setAuth, initialized } = useAuth();
-  const [activeTab, setActiveTab] = useState<TabId>("profile");
+  const searchParams = useSearchParams();
+
+  // read tab from query ?tab=orders
+  const tabFromQuery = searchParams.get("tab");
+  const initialTab: TabId =
+    tabFromQuery === "orders" || tabFromQuery === "reorders"
+      ? (tabFromQuery as TabId)
+      : "profile";
+
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab);
   const [editing, setEditing] = useState(false);
 
   // 🔄 Ensure we have user loaded from /users/me when token exists

@@ -91,11 +91,8 @@ async function generateInvoicePdf(
   doc.text("Pharmacy Express", margin, headerTopY);
 
   // Company meta under brand
-  let companyY = headerTopY + 10;
+  let companyY = headerTopY + 13;
   doc.setFontSize(11);
-  doc.setTextColor(31, 41, 55); // gray-800
-  doc.text("Safescript Pharmacy", margin, companyY);
-  companyY += lineHeight;
   doc.setTextColor(75, 85, 99); // gray-600
   doc.text("United Kingdom", margin, companyY);
   companyY += lineHeight;
@@ -895,7 +892,7 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
               disabled={testSubmitting}
               className="inline-flex items-center justify-center rounded-full bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
-              {testSubmitting ? "Redirecting…" : "Test success"}
+              {testSubmitting ? "Payment Successfull" : "Test success"}
             </button>
 
             <Link

@@ -1015,10 +1015,10 @@ export default function SuccessStep() {
           {/* Actions */}
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <Link
-              href="/account?tab=orders&refresh=1"
+              href="/profile?tab=orders"
               className="inline-flex items-center justify-center rounded-full bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
             >
-              View booking &amp; receipt
+              View my orders
             </Link>
 
             <Link

@@ -5,7 +5,7 @@ import { useState } from "react";
 import Image from "next/image";
 import { useRouter } from "next/navigation";
 import Container from "@/components/ui/Container";
-import { Search, ChevronDown, Menu, X, User } from "lucide-react";
+import { Search, ChevronDown, Menu, X, User, Package } from "lucide-react";
 import { useAuth } from "@/components/auth/AuthProvider";
 import CartButton from "@/components/cart/CartButton";
 import type { DynamicNavbarContent } from "@/lib/api";
@@ -183,6 +183,17 @@ const handleLogout = () => {
                     >
                       <User className="h-4 w-4 text-slate-500" />
                       <span>My profile</span>
+                    </button>
+                                        <button
+                      type="button"
+                      onClick={() => {
+                        setAccountOpen(false);
+                        router.push("/profile?tab=orders");
+                      }}
+                      className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left hover:bg-slate-50"
+                    >
+                      <Package className="h-4 w-4 text-slate-500" />
+                      <span>My orders</span>
                     </button>
                     <button
                       type="button"

@@ -71,6 +71,29 @@ function getNodeText(node: any): string {
   return "";
 }
 
+// Recursively collect all <img> elements under a node
+function collectImgElements(node: any, acc: HtmlElement[] = []): HtmlElement[] {
+  if (!node) return acc;
+
+  if (node.type === "tag") {
+    const el = node as HtmlElement;
+
+    if (el.name === "img") {
+      acc.push(el);
+    }
+
+    if (el.children && Array.isArray(el.children)) {
+      el.children.forEach((child) => collectImgElements(child, acc));
+    }
+  } else if ((node as any).children && Array.isArray((node as any).children)) {
+    (node as any).children.forEach((child: any) =>
+      collectImgElements(child, acc)
+    );
+  }
+
+  return acc;
+}
+
 /* ------------ Styled HTML renderer (styles your content HTML) ------------ */
 
 function RichContent({ html }: { html: string }) {
@@ -121,9 +144,6 @@ function RichContent({ html }: { html: string }) {
             <div className="my-8 flex flex-wrap justify-center gap-3">
               {anchors.map((a, idx) => {
                 const href = a.attribs.href || "#";
-                const target = a.attribs.target;
-                const rel =
-                  target === "_blank" ? "noopener noreferrer" : undefined;
 
                 const label = domToReact(
                   (a.children || []) as unknown as DOMNode[],
@@ -142,8 +162,6 @@ function RichContent({ html }: { html: string }) {
                   <a
                     key={idx}
                     href={href}
-                    target={target}
-                    rel={rel}
                     className={`${baseBtn} ${idx === 0 ? primary : secondary}`}
                   >
                     {label}
@@ -154,20 +172,12 @@ function RichContent({ html }: { html: string }) {
           );
         }
 
-        // 🔧 NEW: paragraph that contains <img> → render as image block, not <p>
-        const hasImgTag = children.some(
-          (child) =>
-            child.type === "tag" && (child as HtmlElement).name === "img"
-        );
-        if (hasImgTag) {
-          const imgs = children.filter(
-            (child) =>
-              child.type === "tag" && (child as HtmlElement).name === "img"
-          ) as HtmlElement[];
-
+        // 🔧 Paragraph that contains ANY <img> (even nested inside <strong>, <span>, etc.)
+        const imgElements = collectImgElements(el);
+        if (imgElements.length) {
           return (
             <div className="my-8 flex flex-col items-center gap-4">
-              {imgs.map((img, idx) => {
+              {imgElements.map((img, idx) => {
                 const src = img.attribs.src || "";
                 const alt = img.attribs.alt || "";
                 return (
@@ -286,14 +296,10 @@ function RichContent({ html }: { html: string }) {
 
         case "a": {
           const href = el.attribs.href || "#";
-          const target = el.attribs.target;
-          const rel = target === "_blank" ? "noopener noreferrer" : undefined;
 
           return (
             <a
               href={href}
-              target={target}
-              rel={rel}
               className="font-semibold text-emerald-700 underline underline-offset-2 hover:text-emerald-800"
             >
               {childrenReact}
