@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useCart } from "@/components/cart/cart-context";
 
 import {
@@ -20,6 +20,11 @@ import {
 } from "@/lib/api";
 
 type SummaryRow = { label: string; value: string };
+
+// ✅ Props so we can do <SuccessStep serviceSlug={slug} />
+export type SuccessStepProps = {
+  serviceSlug?: string;
+};
 
 // minor (pence) → "£12.34"
 function formatMinorGBP(minor?: number | null): string {
@@ -52,23 +57,20 @@ function humanTypeLabel(rawType: string | null | undefined) {
   }
 }
 
-/**
- * SuccessStep
- *
- * - Derives `ref` from query or last_payment
- * - Posts /api/orders/pending ONCE per ref (legacy flow)
- * - Clears cart idempotently
- * - Polls backend /account/orders/by-ref/:ref for statuses
- * - Fetches full order by id (GET /orders/:id) and renders invoice
- */
-export default function SuccessStep() {
+export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
   const search = useSearchParams();
+  const router = useRouter();
   const { clearCart } = useCart();
 
   const [cleared, setCleared] = useState(false);
   const clearingRef = useRef(false);
 
-  // ---- Reference from URL or last_payment ----
+  const handleBackToHome = () => {
+    // Remove this success page from history and go home.
+    router.replace("/");
+  };
+
+  // ---- Reference from URL or last_payment (baseline) ----
   const ref = useMemo(() => {
     try {
       const last =
@@ -77,22 +79,12 @@ export default function SuccessStep() {
           : null;
 
       const paramRef =
-        (search.get("ref") ||
-          search.get("reference") ||
-          search.get("order") ||
-          search.get("orderId") ||
-          "") + "";
+        (search.get("ref") || search.get("reference") || "") + "";
 
       const lastRef = last?.ref || "";
       return paramRef || lastRef;
     } catch {
-      return (
-        (search.get("ref") ||
-          search.get("reference") ||
-          search.get("order") ||
-          search.get("orderId") ||
-          "") + ""
-      );
+      return ((search.get("ref") || search.get("reference") || "") + "") as string;
     }
   }, [search]);
 
@@ -138,6 +130,16 @@ export default function SuccessStep() {
   const emailFromQuery = (search.get("email") || "") + "";
   const slugFromQuery = (search.get("slug") || "") + "";
 
+  // ---- Effective service slug for "Book another treatment" ----
+  const effectiveServiceSlug = useMemo(() => {
+    if (serviceSlug) return serviceSlug;
+    if (slugFromQuery) return slugFromQuery;
+    if (typeof window !== "undefined") {
+      return window.localStorage.getItem("service_slug") || "";
+    }
+    return "";
+  }, [serviceSlug, slugFromQuery]);
+
   // ---- Appointment date/time ----
   const startISO = useMemo(() => {
     const candidates: (string | null)[] = [
@@ -147,10 +149,8 @@ export default function SuccessStep() {
       search.get("slot"),
       search.get("appointment"),
     ];
-    let iso =
-      (candidates.find((v) => v && /^\d{4}-\d{2}-\d{2}T/.test(v)) || "") as
-        | string
-        | undefined;
+    let iso = (candidates.find((v) => v && /^\d{4}-\d{2}-\d{2}T/.test(v)) ||
+      "") as string | undefined;
 
     if (!iso) {
       const d = (search.get("date") || "").toString().trim();
@@ -249,6 +249,9 @@ export default function SuccessStep() {
     string | null
   >(null);
 
+  // ✅ NEW: backend order.reference (e.g. PTCN120647)
+  const [orderReference, setOrderReference] = useState<string | null>(null);
+
   // derive patient from localStorage ("user"/"pharmacy_user")
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -286,6 +289,12 @@ export default function SuccessStep() {
     }
   }, []);
 
+  // ✅ Prefer backend reference when available
+  const effectiveRef = useMemo(
+    () => orderReference || ref,
+    [orderReference, ref]
+  );
+
   // ---- RAF / assessment answers summary ----
   useEffect(() => {
     const slug =
@@ -297,8 +306,7 @@ export default function SuccessStep() {
     if (!slug || typeof window === "undefined") return;
 
     try {
-      const labelsRaw =
-        window.localStorage.getItem(`raf_labels.${slug}`) || "";
+      const labelsRaw = window.localStorage.getItem(`raf_labels.${slug}`) || "";
       const answersRaw =
         window.localStorage.getItem(`assessmentanswers.${slug}`) ||
         window.localStorage.getItem(`raf.answers.${slug}`) ||
@@ -428,15 +436,13 @@ export default function SuccessStep() {
           toInt(search.get("totalMinor")) ||
           items.reduce(
             (s, it) =>
-              s +
-              (it.totalMinor ??
-                it.unitMinor * Math.max(1, it.qty || 1)),
+              s + (it.totalMinor ?? it.unitMinor * Math.max(1, it.qty || 1)),
             0
           );
 
         // End time (if any)
         const endISO =
-          ((search.get("end_at") || "") + "") ||
+          (search.get("end_at") || "") + "" ||
           (typeof window !== "undefined"
             ? window.localStorage.getItem("appointment_end_at") ||
               window.sessionStorage.getItem("appointment_end_at") ||
@@ -473,8 +479,7 @@ export default function SuccessStep() {
             variation: i.variations ?? null,
             unitMinor: i.unitMinor,
             priceMinor: i.unitMinor,
-            totalMinor:
-              i.totalMinor ?? i.unitMinor * Math.max(1, i.qty || 1),
+            totalMinor: i.totalMinor ?? i.unitMinor * Math.max(1, i.qty || 1),
           })),
           token:
             typeof window !== "undefined"
@@ -531,6 +536,11 @@ export default function SuccessStep() {
         if (cancelled || !order) return;
 
         const meta: any = (order as any).meta || {};
+
+        // ✅ set backend reference (PTCN120647 etc.)
+        if ((order as any).reference) {
+          setOrderReference(String((order as any).reference));
+        }
 
         // booking type & service from backend
         if (typeof (order as any).order_type === "string") {
@@ -597,9 +607,7 @@ export default function SuccessStep() {
           } else {
             totalMinor = fromOrderItems.reduce(
               (s, it) =>
-                s +
-                (it.totalMinor ??
-                  it.unitMinor * Math.max(1, it.qty || 1)),
+                s + (it.totalMinor ?? it.unitMinor * Math.max(1, it.qty || 1)),
               0
             );
           }
@@ -621,14 +629,14 @@ export default function SuccessStep() {
   /*   (still useful if another system updates payment/booking later)   */
   /* ------------------------------------------------------------------ */
   useEffect(() => {
-    if (!ref) return;
+    if (!effectiveRef) return;
 
     let cancelled = false;
     let iv: any = null;
 
     const fetchOrder = async () => {
       try {
-        const data = await fetchOrderByReferenceApi(ref);
+        const data = await fetchOrderByReferenceApi(effectiveRef);
         if (cancelled || !data) return;
 
         const pay = String(data?.payment_status || "");
@@ -640,9 +648,7 @@ export default function SuccessStep() {
 
         if (
           pay === "paid" &&
-          (book === "approved" ||
-            book === "rejected" ||
-            book === "")
+          (book === "approved" || book === "rejected" || book === "")
         ) {
           if (iv) clearInterval(iv);
           setPolling(false);
@@ -672,45 +678,38 @@ export default function SuccessStep() {
       if (iv) clearInterval(iv);
       setPolling(false);
     };
-  }, [ref]);
+  }, [effectiveRef]);
 
   const title = useMemo(
-    () => (ref ? "Payment complete" : "All done"),
-    [ref]
+    () => (effectiveRef ? "Payment complete" : "All done"),
+    [effectiveRef]
   );
 
   const patientEmail = emailFromQuery || patient.email || "";
 
   const subtitle = useMemo(() => {
     const emailDisplay = patientEmail;
-    if (ref && emailDisplay) {
-      return `We’ve emailed your receipt and booking confirmation to ${emailDisplay}.`;
+    if (effectiveRef && emailDisplay) {
+      return `We’ve emailed your  booking confirmation to ${emailDisplay}.`;
     }
-    if (ref) {
-      return "We will email your receipt and booking confirmation once the pharmacist approves your order.";
+    if (effectiveRef) {
+      return "We will email your  booking confirmation once the pharmacist approves your order.";
     }
     return "Thank you, your booking has been received.";
-  }, [ref, patientEmail]);
+  }, [effectiveRef, patientEmail]);
 
   const totalMinor =
     invoiceTotalMinor ??
     invoiceItems.reduce(
-      (s, it) =>
-        s +
-        (it.totalMinor ?? it.unitMinor * Math.max(1, it.qty || 1)),
+      (s, it) => s + (it.totalMinor ?? it.unitMinor * Math.max(1, it.qty || 1)),
       0
     );
 
   const bookingTypeForUi = orderTypeOverride || baseType;
 
-  const serviceSlug =
-    slugFromQuery ||
-    (typeof window !== "undefined"
-      ? window.localStorage.getItem("service_slug") || ""
-      : "");
   const serviceDisplay =
     serviceNameFromOrder ||
-    (serviceSlug ? serviceSlug.replace(/-/g, " ") : "");
+    (effectiveServiceSlug ? effectiveServiceSlug.replace(/-/g, " ") : "");
 
   return (
     <div className="mx-auto max-w-4xl" data-hide-in-progress="true">
@@ -748,11 +747,11 @@ export default function SuccessStep() {
             <span className="rounded-full bg-black/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-50">
               Invoice &amp; booking summary
             </span>
-            {ref && (
+            {effectiveRef && (
               <span className="text-emerald-50/90">
                 Reference:{" "}
                 <span className="font-semibold tracking-wide">
-                  {ref}
+                  {effectiveRef}
                 </span>
               </span>
             )}
@@ -821,8 +820,8 @@ export default function SuccessStep() {
                 </p>
               )}
               <p className="mt-2 text-[11px] text-slate-500">
-                Your clinician will review this booking and contact you
-                if anything else is needed.
+                Your clinician will review this booking and contact you if
+                anything else is needed.
               </p>
             </div>
 
@@ -861,27 +860,23 @@ export default function SuccessStep() {
                 <dt className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">
                   Invoice date
                 </dt>
-                <dd className="mt-0.5 text-slate-800">
-                  {invoiceDateLabel}
-                </dd>
+                <dd className="mt-0.5 text-slate-800">{invoiceDateLabel}</dd>
               </div>
               {appointmentLabel && (
                 <div>
                   <dt className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">
                     Appointment
                   </dt>
-                  <dd className="mt-0.5 text-slate-800">
-                    {appointmentLabel}
-                  </dd>
+                  <dd className="mt-0.5 text-slate-800">{appointmentLabel}</dd>
                 </div>
               )}
-              {ref && (
+              {effectiveRef && (
                 <div>
                   <dt className="text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500">
                     Reference
                   </dt>
                   <dd className="mt-0.5 font-mono text-[11px] text-slate-800 md:text-xs">
-                    {ref}
+                    {effectiveRef}
                   </dd>
                 </div>
               )}
@@ -919,20 +914,15 @@ export default function SuccessStep() {
                     invoiceItems.map((it, idx) => {
                       const qty = Math.max(1, it.qty || 1);
                       const unitMinor = it.unitMinor || 0;
-                      const lineTotal =
-                        it.totalMinor ?? unitMinor * qty;
+                      const lineTotal = it.totalMinor ?? unitMinor * qty;
                       const variation =
-                        (it as any).variations ||
-                        (it as any).variation ||
-                        "";
+                        (it as any).variations || (it as any).variation || "";
 
                       return (
                         <tr
                           key={`${it.sku || it.name || idx}-${idx}`}
                           className={
-                            idx % 2 === 1
-                              ? "bg-slate-50/60"
-                              : "bg-transparent"
+                            idx % 2 === 1 ? "bg-slate-50/60" : "bg-transparent"
                           }
                         >
                           <td className="px-4 py-2 align-top font-medium text-slate-900">
@@ -959,9 +949,9 @@ export default function SuccessStep() {
                         className="px-4 py-4 text-sm text-slate-600"
                         colSpan={5}
                       >
-                        Your booking has been recorded. Item details were
-                        not available locally, but will appear in your
-                        order history.
+                        Your booking has been recorded. Item details were not
+                        available locally, but will appear in your order
+                        history.
                       </td>
                     </tr>
                   )}
@@ -979,38 +969,11 @@ export default function SuccessStep() {
                   <span>{formatMinorGBP(totalMinor)}</span>
                 </div>
                 <p className="mt-1 text-[11px] text-slate-500">
-                  All prices include any applicable taxes and clinic
-                  fees.
+                  All prices include any applicable taxes and clinic fees.
                 </p>
               </div>
             </div>
           </div>
-
-          {/* Medical answers summary (optional) */}
-          {summaryAnswers.length > 0 && (
-            <div className="rounded-2xl border border-slate-100 bg-slate-50/80 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
-                  Medical answers (summary)
-                </p>
-                <span className="text-[11px] text-slate-500">
-                  Shared securely with our clinicians only
-                </span>
-              </div>
-              <dl className="mt-3 grid grid-cols-1 gap-3 text-xs md:grid-cols-2 md:text-sm">
-                {summaryAnswers.map((row, idx) => (
-                  <div key={`${row.label}-${idx}`}>
-                    <dt className="text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500">
-                      {row.label}
-                    </dt>
-                    <dd className="mt-0.5 text-slate-900">
-                      {row.value}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
-          )}
 
           {/* Actions */}
           <div className="mt-2 flex flex-wrap items-center gap-3">
@@ -1021,16 +984,17 @@ export default function SuccessStep() {
               View my orders
             </Link>
 
-            <Link
-              href="/"
+            <button
+              type="button"
+              onClick={handleBackToHome}
               className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50"
             >
               Back to home
-            </Link>
+            </button>
 
-            {serviceSlug && (
+            {effectiveServiceSlug && (
               <Link
-                href={`/private-services/${serviceSlug}/book?step=treatments`}
+                href={`/private-services/${effectiveServiceSlug}/book?step=treatments`}
                 className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50"
               >
                 Book another treatment
@@ -1039,9 +1003,9 @@ export default function SuccessStep() {
           </div>
 
           <p className="text-[11px] text-slate-500">
-            You can safely close this page once you&apos;ve saved or
-            printed it. A copy of this invoice and your booking details
-            will also be available in your account.
+            You can safely close this page once you&apos;ve saved or printed it.
+            A copy of this invoice and your booking details will also be
+            available in your account.
           </p>
         </section>
       </div>

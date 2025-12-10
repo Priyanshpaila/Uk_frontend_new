@@ -2226,3 +2226,60 @@ export async function nhsRegisterApi(
     body: JSON.stringify(bodyToSend),
   });
 }
+
+
+/* ------------------------------------------------------------------ */
+/*                       Page image upload API                        */
+/* ------------------------------------------------------------------ */
+
+export type UploadPageImageResult = {
+  url: string;      // e.g. "/upload/pages/page-1765360105968-434476082.jpg"
+  filename: string; // e.g. "pexels-anntarazevich-5629205.jpg"
+  [key: string]: any;
+};
+
+/**
+ * POST /pages/upload-image
+ * Sends a single image file via FormData and returns { url, filename }.
+ *
+ * `fieldName` defaults to "image" – change to "file" if your backend
+ * expects a different field name.
+ */
+export async function uploadPageImageApi(
+  file: File,
+  fieldName: string = "image"
+): Promise<UploadPageImageResult> {
+  const base = getBackendBase();
+  const tokenHeader = getAuthHeader();
+
+  const fd = new FormData();
+  fd.append(fieldName, file);
+
+  const res = await fetch(`${base}/pages/upload-image`, {
+    method: "POST",
+    headers: {
+      // DO NOT set Content-Type; browser will set multipart boundary
+      ...tokenHeader,
+    },
+    body: fd,
+  });
+
+  let data: any = {};
+  try {
+    data = await res.json();
+  } catch {
+    data = {};
+  }
+
+  if (!res.ok) {
+    throw new Error(
+      data?.message || `Page image upload failed (${res.status})`
+    );
+  }
+
+  return {
+    url: data.url,
+    filename: data.filename,
+    ...data,
+  };
+}

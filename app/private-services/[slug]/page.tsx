@@ -1,5 +1,3 @@
-// app/private-services/[slug]/page.tsx
-
 import type { Metadata } from "next";
 import Image from "next/image";
 import parse, {
@@ -8,6 +6,8 @@ import parse, {
   type DOMNode,
   type HTMLReactParserOptions,
 } from "html-react-parser";
+import { ShieldCheck, Truck, MessageCircle, CheckCircle2 } from "lucide-react";
+import Container from "@/components/ui/Container";
 import { fetchPageBySlug } from "@/lib/api";
 
 export const revalidate = 0;
@@ -133,7 +133,7 @@ function RichContent({ html }: { html: string }) {
             return false;
           });
 
-        // e.g. "Start now / Reorder" line
+        // e.g. "Start now / Reorder" line -> CTA buttons row
         if (isButtonRow) {
           const anchors = children.filter(
             (child) =>
@@ -172,7 +172,7 @@ function RichContent({ html }: { html: string }) {
           );
         }
 
-        // 🔧 Paragraph that contains ANY <img> (even nested inside <strong>, <span>, etc.)
+        // Paragraph that contains ANY <img> (even nested)
         const imgElements = collectImgElements(el);
         if (imgElements.length) {
           return (
@@ -182,6 +182,7 @@ function RichContent({ html }: { html: string }) {
                 const alt = img.attribs.alt || "";
                 return (
                   <figure key={idx} className="flex justify-center">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={src}
                       alt={alt}
@@ -194,7 +195,7 @@ function RichContent({ html }: { html: string }) {
           );
         }
 
-        // Normal paragraph
+        // Normal paragraph, with detection for "callout" style
         const childrenReact = domToReact(
           (el.children || []) as unknown as DOMNode[],
           options
@@ -211,10 +212,37 @@ function RichContent({ html }: { html: string }) {
           return <div className="h-4 md:h-6" />;
         }
 
+        // Callout paragraph if it starts with a short <strong> label
+        const firstTagChild = children.find(
+          (child) => child.type === "tag"
+        ) as HtmlElement | undefined;
+        const firstStrongLabel =
+          firstTagChild && firstTagChild.name === "strong"
+            ? getNodeText(firstTagChild)
+            : "";
+        const isCallout =
+          !!firstStrongLabel &&
+          firstStrongLabel.trim().length > 0 &&
+          firstStrongLabel.trim().length <= 40 &&
+          textContent.trim().length <= 260; // avoid giant blocks
+
+        if (isCallout) {
+          return (
+            <div
+              className={[
+                "my-4 mx-auto max-w-2xl rounded-2xl border border-emerald-100 bg-emerald-50/70 px-4 py-3",
+                "text-sm md:text-[15px] leading-relaxed text-emerald-900 shadow-soft-card",
+              ].join(" ")}
+            >
+              {childrenReact}
+            </div>
+          );
+        }
+
         return (
           <p
             className={[
-              "mb-4 max-w-2xl text-sm md:text-base leading-relaxed text-slate-700",
+              "mb-4 max-w-2xl text-[13px] md:text-[15px] leading-relaxed tracking-[0.01em] text-slate-700",
               "mx-auto",
               isCentered ? "text-center" : "text-left",
             ].join(" ")}
@@ -242,22 +270,22 @@ function RichContent({ html }: { html: string }) {
 
         case "h2":
           return (
-            <h2 className="mb-4 mt-10 text-center text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">
+            <h2 className="mb-5 mt-10 text-center text-2xl font-semibold tracking-tight text-slate-900 md:text-3xl">
               {childrenReact}
-              <div className="mx-auto mt-2 h-1 w-16 rounded-full bg-emerald-400/80" />
+              <div className="mx-auto mt-3 h-1 w-16 rounded-full bg-gradient-to-r from-emerald-400 to-cyan-400" />
             </h2>
           );
 
         case "h3":
           return (
-            <h3 className="mt-8 mb-3 text-lg font-semibold text-slate-900 md:text-xl">
+            <h3 className="mt-8 mb-3 border-l-4 border-emerald-200 pl-3 text-lg font-semibold text-slate-900 md:text-xl">
               {childrenReact}
             </h3>
           );
 
         case "h4":
           return (
-            <h4 className="mt-6 mb-2 text-base font-semibold text-slate-900 md:text-lg">
+            <h4 className="mt-6 mb-2 border-l-2 border-emerald-200 pl-3 text-base font-semibold text-slate-900 md:text-lg">
               {childrenReact}
             </h4>
           );
@@ -274,23 +302,24 @@ function RichContent({ html }: { html: string }) {
 
         case "ul":
           return (
-            <ul className="my-5 space-y-2 rounded-2xl bg-slate-50 px-4 py-3 text-slate-700">
+            <ul className="my-5 space-y-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-slate-700 shadow-soft-card">
               {childrenReact}
             </ul>
           );
 
         case "ol":
           return (
-            <ol className="my-5 space-y-2 rounded-2xl bg-slate-50 px-4 py-3 text-slate-700">
+            <ol className="my-5 space-y-2 rounded-2xl border border-slate-100 bg-slate-50 px-4 py-3 text-slate-700 shadow-soft-card">
               {childrenReact}
             </ol>
           );
 
         case "li":
+          // Iconic bullet style, similar to NHS page
           return (
-            <li className="relative pl-4 text-sm leading-relaxed text-slate-700 md:text-base">
-              <span className="absolute left-0 top-2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-emerald-400" />
-              {childrenReact}
+            <li className="flex items-start gap-2 text-sm leading-relaxed text-slate-700 md:text-[15px]">
+              <CheckCircle2 className="mt-1 h-4 w-4 flex-shrink-0 text-emerald-500" />
+              <span>{childrenReact}</span>
             </li>
           );
 
@@ -307,12 +336,56 @@ function RichContent({ html }: { html: string }) {
           );
         }
 
+        case "blockquote":
+          return (
+            <blockquote className="my-6 mx-auto max-w-2xl rounded-2xl border-l-4 border-emerald-400 bg-emerald-50/70 px-5 py-3 text-sm italic text-emerald-900 shadow-soft-card">
+              {childrenReact}
+            </blockquote>
+          );
+
+        case "table":
+          return (
+            <div className="my-6 overflow-x-auto">
+              <table className="min-w-full border-collapse overflow-hidden rounded-2xl border border-slate-200 bg-white text-left text-sm shadow-soft-card">
+                {childrenReact}
+              </table>
+            </div>
+          );
+
+        case "thead":
+          return (
+            <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-600">
+              {childrenReact}
+            </thead>
+          );
+
+        case "tbody":
+          return <tbody className="divide-y divide-slate-100">{childrenReact}</tbody>;
+
+        case "tr":
+          return <tr className="hover:bg-slate-50/60">{childrenReact}</tr>;
+
+        case "th":
+          return (
+            <th className="px-4 py-2 text-xs font-semibold text-slate-700">
+              {childrenReact}
+            </th>
+          );
+
+        case "td":
+          return (
+            <td className="px-4 py-2 align-top text-xs text-slate-700">
+              {childrenReact}
+            </td>
+          );
+
         case "img": {
           // images that are *not* wrapped in a paragraph
           const src = el.attribs.src || "";
           const alt = el.attribs.alt || "";
           return (
             <figure className="my-8 flex justify-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={src}
                 alt={alt}
@@ -321,6 +394,9 @@ function RichContent({ html }: { html: string }) {
             </figure>
           );
         }
+
+        case "hr":
+          return <div className="my-8 h-px w-full bg-slate-200" />;
 
         case "br":
           return <br />;
@@ -332,13 +408,13 @@ function RichContent({ html }: { html: string }) {
   };
 
   return (
-    <div className="rich-content mx-auto max-w-3xl space-y-2 text-sm leading-relaxed text-slate-700 md:text-base">
+    <div className="rich-content mx-auto max-w-3xl space-y-4 text-[13px] leading-relaxed tracking-[0.01em] text-slate-700 md:text-[15px]">
       {parse(html, options)}
     </div>
   );
 }
 
-/* ------------ Page component ------------ */
+/* ------------ Page component with “iconic” layout ------------ */
 
 export default async function ServiceLanding({
   params,
@@ -347,6 +423,16 @@ export default async function ServiceLanding({
 }) {
   const { slug } = await params;
   const page = await fetchPageBySlug(slug);
+
+  if (!page) {
+    return (
+      <main className="mx-auto max-w-5xl px-4 py-10">
+        <section className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-sm text-slate-700">
+          Service page not found.
+        </section>
+      </main>
+    );
+  }
 
   const html = page.rendered_html || page.content || "";
 
@@ -358,46 +444,72 @@ export default async function ServiceLanding({
   const blur = Number(bg?.blur ?? 12);
   const blurCls = blurClass(blur);
 
-  // Simple layout if no background image configured
-  if (!bgUrl || !bgEnabled) {
-    return (
-      <main className="mx-auto max-w-5xl px-4 py-10">
-        <section className="relative overflow-hidden rounded-xl border border-slate-200/70 bg-slate-50/90 p-6 shadow-soft-card md:p-10">
-          {/* soft theme gradient */}
-          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-emerald-50/70 via-white to-cyan-50/60" />
-          <div className="relative">
+  const hasBg = Boolean(bgUrl && bgEnabled);
+
+  return (
+    <main className="bg-slate-50">
+      {/* HERO – styled similarly to NHS services page */}
+      <section className="relative border-b border-emerald-100/70 bg-gradient-to-b from-emerald-50/70 via-white to-emerald-50/30">
+        {hasBg && (
+          <div className="pointer-events-none absolute inset-0">
+            <Image
+              src={resolvedBgUrl}
+              alt={page.title || ""}
+              fill
+              priority={false}
+              sizes="100vw"
+              className="object-cover opacity-70"
+            />
+            <div
+              className="absolute inset-0 bg-slate-900"
+              style={{ opacity: overlayPct / 100, mixBlendMode: "multiply" }}
+            />
+          </div>
+        )}
+
+        <div className="relative">
+          <Container>
+            <div className="py-8 md:py-12 lg:py-16">
+              <div
+                className={`mx-auto max-w-5xl rounded-3xl border border-emerald-100/70 bg-white/85 ${blurCls} px-5 py-6 shadow-soft-card ring-1 ring-slate-900/5 md:px-8 md:py-8`}
+              >
+                {/* Top pill */}
+                <div className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-800">
+                  <span className="h-1 w-1 rounded-full bg-emerald-700" />
+                  <span>Pharmacy Express</span>
+                </div>
+
+                {/* Title intentionally left dynamic / handled by content if needed */}
+
+                {/* Icon chips – iconic feel like NHS page */}
+                <div className="mt-4 flex flex-wrap gap-3 text-[11px] text-slate-500">
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 shadow-sm ring-1 ring-slate-100">
+                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
+                    GPhC-registered UK pharmacy
+                  </span>
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 shadow-sm ring-1 ring-slate-100">
+                    <Truck className="h-3.5 w-3.5 text-emerald-500" />
+                    Fast, discreet delivery
+                  </span>
+                  <span className="inline-flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 shadow-sm ring-1 ring-slate-100">
+                    <MessageCircle className="h-3.5 w-3.5 text-emerald-500" />
+                    Online clinician support
+                  </span>
+                </div>
+              </div>
+            </div>
+          </Container>
+        </div>
+      </section>
+
+      {/* MAIN CONTENT – dynamic rendered HTML inside a card */}
+      <section className="border-b border-slate-200 bg-white/95 py-8 md:py-12">
+        <Container>
+          <div className="mx-auto max-w-5xl rounded-3xl border border-slate-200/80 bg-white/95 px-5 py-6 shadow-soft-card md:px-8 md:py-8">
             <RichContent html={html} />
           </div>
-        </section>
-      </main>
-    );
-  }
-
-  // Layout with hero background image
-  return (
-    <div className="relative min-h-screen bg-black">
-      <div className="pointer-events-none absolute inset-0">
-        <Image
-          src={resolvedBgUrl}
-          alt={page.title || ""}
-          fill
-          priority={false}
-          sizes="100vw"
-          className="object-cover"
-        />
-        <div
-          className="absolute inset-0"
-          style={{ backgroundColor: `rgba(0,0,0,${overlayPct / 100})` }}
-        />
-      </div>
-
-      <div className="relative z-10 mx-auto max-w-5xl px-4 py-10">
-        <div
-          className={`rounded-4xl bg-amber-50/95 ${blurCls} p-6 shadow-2xl ring-1 ring-black/10 md:p-10`}
-        >
-          <RichContent html={html} />
-        </div>
-      </div>
-    </div>
+        </Container>
+      </section>
+    </main>
   );
 }

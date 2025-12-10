@@ -28,6 +28,8 @@ import {
 
 type PaymentStepProps = {
   serviceSlug?: string;
+  // When provided, use this to jump to "Success" in the multi-step flow
+  goToSuccessStep?: () => void;
 };
 
 /* ------------------------------------------------------------------ */
@@ -421,17 +423,6 @@ async function sendInvoiceEmailForOrder(
 
     const subject = `Payment successful - Ref ${ref}`;
 
-    // 3) Try to generate PDF (may fail – we still want to send email)
-    let invoicePdf: File | null = null;
-    try {
-      invoicePdf = await generateInvoicePdf(order, payment);
-    } catch (err) {
-      console.error(
-        "Failed to generate invoice PDF, will send email without attachment",
-        err
-      );
-    }
-
     const baseContext = {
       name: customerName,
       email,
@@ -444,59 +435,39 @@ async function sendInvoiceEmailForOrder(
       year: new Date().getFullYear().toString(),
     };
 
-    // 4) First attempt: with attachment (if we have one)
+    // ✅ Single call – NO attachments at all
     try {
-      console.log("▶ Sending email (with attachment?)", {
+      console.log("▶ Sending payment confirmation email", {
         to: email,
         subject,
-        hasAttachment: !!invoicePdf,
       });
 
       await sendEmailApi({
         to: email,
         subject,
-        template: "paymentconfirmed", // 🔒 hard-coded template
+        template: "paymentconfirmed", // keep existing template
         context: baseContext,
-        attachments: invoicePdf ? [invoicePdf] : undefined,
+        // ❌ no attachments
       });
 
-      console.log("✅ Invoice email sent successfully");
-      return;
+      console.log("✅ Invoice / payment email sent successfully (no attachment)");
     } catch (err) {
-      console.error(
-        "Failed to send email with attachment, will retry without attachment",
-        err
-      );
-    }
-
-    // 5) Fallback attempt: send again without attachment
-    try {
-      await sendEmailApi({
-        to: email,
-        subject,
-        template: "paymentconfirmed",
-        context: baseContext,
-        // no attachments
-      });
-      console.log(
-        "✅ Invoice email sent successfully (no attachment fallback)"
-      );
-    } catch (err2) {
-      console.error(
-        "❌ Failed to send invoice email even without attachment",
-        err2
-      );
+      console.error("❌ Failed to send invoice / payment email", err);
     }
   } catch (err) {
     console.error("Failed in sendInvoiceEmailForOrder wrapper:", err);
   }
 }
 
+
 /* ------------------------------------------------------------------ */
 /*                          Component body                            */
 /* ------------------------------------------------------------------ */
 
-export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
+export default function PaymentStep({
+  serviceSlug,
+  goToSuccessStep,
+}: PaymentStepProps) {
   const search = useSearchParams();
   const router = useRouter();
 
@@ -533,6 +504,30 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
     }
   }, [search]);
 
+    // ---- Order reference (PTCN code) from backend ----
+  const [orderReference, setOrderReference] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!orderId) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const order = await getOrderByIdApi(orderId);
+        if (!cancelled && (order as any)?.reference) {
+          setOrderReference(String((order as any).reference));
+        }
+      } catch (err) {
+        console.error("Failed to load order for reference", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [orderId]);
+
   const appointmentAtIso = search?.get("appointment_at") || null;
   const appointmentAtPretty = useMemo(() => {
     if (!appointmentAtIso) return null;
@@ -566,8 +561,8 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
 
   // ---- Payment reference (no orderRef; just orderId or refCode) ----
   const paymentRef = useMemo(
-    () => (orderId ? String(orderId) : refCode),
-    [orderId, refCode]
+    () => orderReference || refCode,
+    [orderReference, refCode]
   );
 
   // ---- last_payment payload builder ----
@@ -633,16 +628,28 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
       }
     }
 
-    const base = `/private-services/${effectiveSlug}/book`;
-    const u = new URL(base, window.location.origin);
-    u.searchParams.set("step", "success");
-    u.searchParams.set("order", orderId || payload.ref);
-    u.searchParams.set("slug", effectiveSlug);
-    if (appointmentAtIso) {
-      u.searchParams.set("appointment_at", appointmentAtIso);
+    // If we are inside multi-step flow, just go to success step
+    if (goToSuccessStep) {
+      goToSuccessStep();
+      setTestSubmitting(false);
+      return;
     }
 
-    router.push(u.pathname + u.search + u.hash);
+    // Fallback: navigate to success route
+    if (typeof window !== "undefined") {
+      const base = `/private-services/${effectiveSlug}/book`;
+      const u = new URL(base, window.location.origin);
+      u.searchParams.set("step", "success");
+      u.searchParams.set("order", orderId || payload.ref);
+      u.searchParams.set("slug", effectiveSlug);
+      if (appointmentAtIso) {
+        u.searchParams.set("appointment_at", appointmentAtIso);
+      }
+
+      router.push(u.pathname + u.search + u.hash);
+    }
+
+    setTestSubmitting(false);
   };
 
   // =========================
@@ -892,7 +899,7 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
               disabled={testSubmitting}
               className="inline-flex items-center justify-center rounded-full bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
-              {testSubmitting ? "Payment Successfull" : "Test success"}
+              {testSubmitting ? "Payment Successful" : "Test success"}
             </button>
 
             <Link
@@ -979,18 +986,28 @@ export default function PaymentStep({ serviceSlug }: PaymentStepProps) {
                         }
                       }
 
-                      const base = `/private-services/${effectiveSlug}/book`;
-                      const u = new URL(base, window.location.origin);
-                      u.searchParams.set("step", "success");
-                      u.searchParams.set("order", orderId || payload.ref);
-                      u.searchParams.set("slug", effectiveSlug);
-                      if (appointmentAtIso) {
-                        u.searchParams.set(
-                          "appointment_at",
-                          appointmentAtIso
-                        );
+                      // If used inside the multi-step flow, go straight to success step
+                      if (goToSuccessStep) {
+                        goToSuccessStep();
+                        return;
                       }
-                      window.location.href = u.pathname + u.search + u.hash;
+
+                      // Fallback: full redirect to success route
+                      if (typeof window !== "undefined") {
+                        const base = `/private-services/${effectiveSlug}/book`;
+                        const u = new URL(base, window.location.origin);
+                        u.searchParams.set("step", "success");
+                        u.searchParams.set("order", orderId || payload.ref);
+                        u.searchParams.set("slug", effectiveSlug);
+                        if (appointmentAtIso) {
+                          u.searchParams.set(
+                            "appointment_at",
+                            appointmentAtIso
+                          );
+                        }
+                        window.location.href =
+                          u.pathname + u.search + u.hash;
+                      }
                       return;
                     }
 

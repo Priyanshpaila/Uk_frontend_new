@@ -19,10 +19,19 @@ import {
   resolveUserIdFromStorage,
   type CreateAppointmentPayload,
   buildRafQAFromStorage,
-  // 🔹 NEW IMPORTS
   fetchBookedSlotsApi,
   type BookedSlotsResponse,
 } from "@/lib/api";
+
+/* ------------------------------------------------------------------ */
+/* Props                                                              */
+/* ------------------------------------------------------------------ */
+
+export type CalendarStepProps = {
+  serviceSlug?: string;
+  autoContinue?: boolean; // kept for compatibility with parent
+  goToPaymentStep?: () => void; // called after successful booking
+};
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -118,35 +127,6 @@ function readRafFormId(slug: string): string | null {
   return null;
 }
 
-function readRafAnswers(slug: string): Record<string, any> | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const keys = [
-      `raf_answers.${slug}`,
-      `raf.answers.${slug}`,
-      `assessment.answers.${slug}`,
-    ];
-    for (const k of keys) {
-      const raw = localStorage.getItem(k);
-      if (raw) {
-        return JSON.parse(raw);
-      }
-    }
-  } catch {}
-  return null;
-}
-
-function formatAnswer(v: any): string {
-  if (v === null || v === undefined) return "";
-  if (Array.isArray(v)) return v.map(formatAnswer).join(", ");
-  if (typeof v === "object") {
-    if ("label" in v) return String((v as any).label);
-    if ("value" in v) return String((v as any).value);
-    return JSON.stringify(v);
-  }
-  return String(v);
-}
-
 function buildOrderMeta(opts: {
   cartItems: any[];
   serviceSlug: string;
@@ -238,9 +218,13 @@ function buildOrderMeta(opts: {
 /* Calendar component                                                 */
 /* ------------------------------------------------------------------ */
 
-export default function CalendarBookingPage() {
+export default function CalendarStep({
+  serviceSlug,
+  autoContinue, // not used currently, but kept for compatibility
+  goToPaymentStep,
+}: CalendarStepProps) {
   const params = useParams<{ slug: string }>();
-  const slug = params?.slug ?? "";
+  const slug = serviceSlug || params?.slug || "";
 
   const router = useRouter();
   const cart = useCart();
@@ -264,13 +248,13 @@ export default function CalendarBookingPage() {
   const [creatingAppointment, setCreatingAppointment] = useState(false);
   const [appointmentError, setAppointmentError] = useState<string | null>(null);
 
-  // ✅ NEW: success message + duplicate guard
+  // success message + duplicate guard
   const [appointmentSuccess, setAppointmentSuccess] = useState<string | null>(
     null
   );
   const [hasCreatedAppointment, setHasCreatedAppointment] = useState(false);
 
-  // ✅ NEW: booked slots from backend for selected date
+  // booked slots from backend for selected date
   const [bookedSlots, setBookedSlots] = useState<BookedSlotsResponse | null>(
     null
   );
@@ -286,6 +270,60 @@ export default function CalendarBookingPage() {
     if (value > maxDate) value = maxDate;
 
     setDate(value);
+  };
+
+  // Build a service-specific view of the schedule so that overrides
+  // only apply to this service (by slug / service_id)
+  const effectiveSchedule: Schedule | null = useMemo(() => {
+    if (!schedule) return null;
+
+    const sch: any = schedule;
+    const currentServiceId = resolveServiceId(schedule, cartItems);
+
+    const rawOverrides = Array.isArray(sch.overrides) ? sch.overrides : null;
+    if (!rawOverrides) {
+      return schedule;
+    }
+
+    const filteredOverrides = rawOverrides.filter((ov: any) => {
+      if (!ov || typeof ov !== "object") return false;
+
+      const ovServiceId =
+        ov.service_id ||
+        ov.serviceId ||
+        (ov.service && (ov.service._id || ov.service.id)) ||
+        null;
+
+      const ovSlug = ov.service_slug || ov.serviceSlug || null;
+
+      // If override is tied to a slug and it doesn't match, skip it
+      if (ovSlug && ovSlug !== slug) return false;
+
+      // If override is tied to a service id and it doesn't match, skip it
+      if (ovServiceId && currentServiceId) {
+        if (String(ovServiceId) !== String(currentServiceId)) return false;
+      }
+
+      // If override has no service binding, we treat it as "global"
+      // and let it apply to all services on this schedule.
+      return true;
+    });
+
+    if (!filteredOverrides.length) {
+      return { ...(schedule as any), overrides: [] } as Schedule;
+    }
+
+    return { ...(schedule as any), overrides: filteredOverrides } as Schedule;
+  }, [schedule, cartItems, slug]);
+
+  const handleSelect = (iso: string, label?: string) => {
+    setSelectedIso(iso);
+    setAppointmentError(null);
+    setAppointmentSuccess(null);
+    persistAppointmentSelection(iso, {
+      label,
+      serviceSlug: slug,
+    });
   };
 
   // Persist service slug for other flows
@@ -331,25 +369,25 @@ export default function CalendarBookingPage() {
     };
   }, [slug]);
 
-  // 2) Build base slots (opening hours) when schedule or date changes
+  // 2) Build base slots (opening hours) when *service-specific* schedule or date changes
   useEffect(() => {
-    if (!schedule) {
+    if (!effectiveSchedule) {
       setSlots([]);
       setDayMeta(null);
       setSelectedIso(null);
       return;
     }
 
-    const { slots: built, meta } = buildSlotsForDate(schedule, date);
+    const { slots: built, meta } = buildSlotsForDate(effectiveSchedule, date);
     setSlots(built);
     setDayMeta(meta);
     setSelectedIso(null);
     setAppointmentError(null);
     setAppointmentSuccess(null);
     setHasCreatedAppointment(false);
-  }, [schedule, date]);
+  }, [effectiveSchedule, date]);
 
-  // 3) 🔹 Fetch booked slots for this schedule + date
+  // 3) Fetch booked slots for this schedule + date
   useEffect(() => {
     if (!scheduleId || !date) {
       setBookedSlots(null);
@@ -379,7 +417,7 @@ export default function CalendarBookingPage() {
     };
   }, [scheduleId, date]);
 
-  // ✅ Whenever user selects a slot, check if we've already created
+  // Whenever user selects a slot, check if we've already created
   // an appointment for this slug + datetime (stored in localStorage)
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -415,16 +453,6 @@ export default function CalendarBookingPage() {
   const hasSlots = slots.length > 0;
   const closedForDay =
     !loading && !!dayMeta && dayMeta.open === false && !hasSlots;
-
-  function handleSelect(iso: string, label?: string) {
-    setSelectedIso(iso);
-    setAppointmentError(null);
-    setAppointmentSuccess(null);
-    persistAppointmentSelection(iso, {
-      label,
-      serviceSlug: slug,
-    });
-  }
 
   // ---- Order + Appointment creation ----
 
@@ -516,14 +544,14 @@ export default function CalendarBookingPage() {
       return;
     }
 
-    const slotMinutes = schedule.slot_minutes || 15;
+    const slotMinutes = (schedule as any).slot_minutes || 15;
     const endDate = new Date(startDate.getTime() + slotMinutes * 60_000);
     const endIso = endDate.toISOString();
 
     const meta = buildOrderMeta({
       cartItems,
       serviceSlug: slug,
-      serviceName: schedule.name,
+      serviceName: (schedule as any).name,
       appointmentIso: selectedIso,
     });
 
@@ -535,7 +563,7 @@ export default function CalendarBookingPage() {
       end_at: endIso,
       meta,
       payment_status: "pending",
-      order_type: "new", // 🔹 explicitly send "new"
+      order_type: "new", // explicitly send "new"
     };
 
     if (process.env.NODE_ENV !== "production") {
@@ -575,7 +603,9 @@ export default function CalendarBookingPage() {
       const appointmentId =
         (appointment && (appointment._id || appointment.id)) || null;
       const appointmentStart =
-        appointment?.start_at || appointment?.startAt || selectedIso;
+        (appointment as any)?.start_at ||
+        (appointment as any)?.startAt ||
+        selectedIso;
 
       // Mark order as having an appointment booked
       try {
@@ -600,22 +630,29 @@ export default function CalendarBookingPage() {
             String(appointmentStart)
           );
 
-        // ✅ store "created" flag for this exact slot to prevent duplicate entries
+        // store "created" flag for this exact slot to prevent duplicate entries
         const key = `appointment_created.${slug}.${appointmentStart}`;
         localStorage.setItem(key, "1");
         setHasCreatedAppointment(true);
       } catch {}
 
-      // ✅ show success message
+      // success message
       setAppointmentSuccess(
         "Appointment booked successfully. Redirecting to payment…"
       );
 
+      // If used inside the multi-step flow, just tell parent to go to payment
+      if (goToPaymentStep) {
+        goToPaymentStep();
+        return;
+      }
+
+      // Fallback: standalone usage – navigate to /book?step=payment
       const qp = new URLSearchParams();
-      qp.set("step", "payment");
-      qp.set("appointment_at", appointmentStart);
+      if (appointmentStart) qp.set("appointment_at", appointmentStart);
       qp.set("service_slug", slug);
       if (orderId) qp.set("order", String(orderId));
+      qp.set("step", "payment");
 
       router.push(
         `/private-services/${encodeURIComponent(slug)}/book?${qp.toString()}`
@@ -629,8 +666,9 @@ export default function CalendarBookingPage() {
 
   const isToday = date === minDate;
 
+  // NOTE: no min-h-screen here; container height is fully content-driven
   return (
-    <main className="min-h-screen bg-pharmacy-bg py-6 md:py-10">
+    <div className="w-full">
       <div className="mx-auto max-w-3xl rounded-3xl border border-gray-200 bg-white/95 p-6 md:p-8 shadow-soft-card">
         {/* Header */}
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -640,17 +678,12 @@ export default function CalendarBookingPage() {
             </h1>
             {schedule && (
               <p className="mt-2 text-xs text-gray-500">
-                {schedule.name} • Times shown in{" "}
+                {(schedule as any).name} • Times shown in{" "}
                 <span className="font-medium">
-                  {schedule.timezone || "local time"}
+                  {(schedule as any).timezone || "local time"}
                 </span>{" "}
-                • {schedule.slot_minutes}
+                • {(schedule as any).slot_minutes}
                 -minute slots
-              </p>
-            )}
-            {scheduleId && (
-              <p className="mt-1 text-[11px] text-gray-400">
-                Schedule ID: {scheduleId}
               </p>
             )}
           </div>
@@ -740,7 +773,7 @@ export default function CalendarBookingPage() {
           </div>
         )}
 
-        {/* ✅ Success banner */}
+        {/* Success banner */}
         {appointmentSuccess && (
           <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">
             {appointmentSuccess}
@@ -768,7 +801,7 @@ export default function CalendarBookingPage() {
               {slots.map((s) => {
                 const isSelected = selectedIso === s.start_at;
 
-                // 🔹 Find matching booked slot from backend by time (e.g. "09:00")
+                // Find matching booked slot from backend by time (e.g. "09:00")
                 const bookedForTime =
                   bookedSlots?.slots?.find((b) => b.time === s.time) || null;
 
@@ -869,6 +902,6 @@ export default function CalendarBookingPage() {
           </div>
         )}
       </div>
-    </main>
+    </div>
   );
 }

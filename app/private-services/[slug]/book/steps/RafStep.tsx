@@ -1,12 +1,6 @@
 "use client";
 
-import {
-  useEffect,
-  useMemo,
-  useState,
-  type Dispatch,
-  type SetStateAction,
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSearchParams, useParams, useRouter } from "next/navigation";
 import { ArrowLeft, AlertCircle, CheckCircle2 } from "lucide-react";
 
@@ -14,8 +8,7 @@ import {
   fetchRafFormForService,
   createConsultationSessionApi,
   saveRafAnswersApi,
-  uploadRafFile,
-  type IntakeUploadResult,
+  uploadPageImageApi,
 } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
@@ -494,6 +487,7 @@ type UploadedFile = {
   type?: string;
   path?: string;
   url?: string;
+  uploading?: boolean;
 };
 
 export default function RafStep() {
@@ -515,8 +509,6 @@ export default function RafStep() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<Answers>({});
   const [saveFlash, setSaveFlash] = useState<string | null>(null);
-  const [fileStash, setFileStash] = useState<Record<string, File[]>>({});
-
   const [sessionId, setSessionId] = useState<number | undefined>(() =>
     resolveInitialSessionId(search as any)
   );
@@ -612,23 +604,21 @@ export default function RafStep() {
         const list = toQuestionArray(result.schema);
         setQuestions(list);
 
-        // 🔥 NEW: store label map + form id in localStorage
+        // store label map + form id in localStorage
         try {
           const labelMap: Record<string, { label: string; key: string }> = {};
 
           for (const q of list) {
             if (q.isLayoutOnly) continue; // ignore dividers, static text, etc.
-            const fieldKey = q.id; // this is the key we use in answers object
+            const fieldKey = q.id;
             labelMap[fieldKey] = {
               label: q.label,
-              key: q.key ?? q.id, // builder key if present, else id
+              key: q.key ?? q.id,
             };
           }
 
-          // Labels map – used later when building formsQA.raf.qa
           localStorage.setItem(`raf_labels.${slug}`, JSON.stringify(labelMap));
 
-          // (optional but useful) Save form meta including form_id
           const formMeta = {
             formId: result._id,
             serviceId: result.service_id ?? null,
@@ -638,6 +628,7 @@ export default function RafStep() {
           };
 
           localStorage.setItem(`raf_form.${slug}`, JSON.stringify(formMeta));
+          localStorage.setItem(rafFormIdKey(slug), String(result._id));
         } catch {
           // ignore storage errors
         }
@@ -729,25 +720,20 @@ export default function RafStep() {
       return !!rawVal;
     }
 
-    // normalise to array for comparison
     const values: any[] = Array.isArray(rawVal) ? rawVal : [rawVal];
 
-    // "in" condition
     if (c.in && c.in.length > 0) {
       return values.some((v) => c.in!.some((item) => looseEqual(v, item)));
     }
 
-    // "equals" condition
     if (c.equals !== undefined) {
       return values.some((v) => looseEqual(v, c.equals));
     }
 
-    // "notEquals" condition
     if (c.notEquals !== undefined) {
       return !values.some((v) => looseEqual(v, c.notEquals));
     }
 
-    // fallback: truthy
     if (Array.isArray(rawVal)) return rawVal.length > 0;
     return !!rawVal;
   };
@@ -848,6 +834,17 @@ export default function RafStep() {
     () => visibleQuestions.filter((q) => q.required && !q.isLayoutOnly).length,
     [visibleQuestions]
   );
+
+  const hasUploadingFiles = useMemo(
+    () =>
+      questions.some((q) => {
+        if (q.type !== "file") return false;
+        const val = answers[q.id];
+        if (!Array.isArray(val)) return false;
+        return val.some((f: any) => f && f.uploading);
+      }),
+    [questions, answers]
+  );
   const remainingRequired = requiredUnanswered.length;
   const answeredRequired = Math.max(totalRequired - remainingRequired, 0);
   const percentComplete = totalRequired
@@ -879,66 +876,52 @@ export default function RafStep() {
     );
   };
 
-  async function uploadFilesForQuestion(
-    qid: string,
-    files: File[]
-  ): Promise<UploadedFile[]> {
-    const out: UploadedFile[] = [];
-    for (const f of files) {
-      const res: IntakeUploadResult = await uploadRafFile(f, "raf").catch(
-        () => ({ ok: false })
-      );
-      if (res.ok) {
-        out.push({
-          name: f.name || "",
-          size: f.size,
-          type: f.type || "file",
-          path: res.path,
-          url: res.url,
-        });
-      }
+  const scrollToQuestion = (qid: string) => {
+    try {
+      const el = document.getElementById(`q-${qid}`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      el.classList.add("ring-2", "ring-rose-400");
+      setTimeout(() => {
+        el.classList.remove("ring-2", "ring-rose-400");
+      }, 1600);
+    } catch {
+      // ignore
     }
-    return out;
-  }
-
-  async function uploadPendingFiles(): Promise<Record<string, UploadedFile[]>> {
-    const out: Record<string, UploadedFile[]> = {};
-    const entries = Object.entries(fileStash || {});
-    for (const [qid, files] of entries) {
-      if (!files || files.length === 0) continue;
-      const uploaded = await uploadFilesForQuestion(qid, files).catch(() => []);
-      if (uploaded.length) out[qid] = uploaded;
-    }
-    return out;
-  }
+  };
 
   const onSubmit = async () => {
-    setSubmitting(true);
     setError(null);
-    setSaveFlash("Saving…");
 
-    let answersToSend: Answers = { ...answers };
-
-    // Attach uploaded file metadata
-    const uploadedByQ = await uploadPendingFiles().catch(() => ({}));
-    for (const [qid, items] of Object.entries(uploadedByQ)) {
-      answersToSend[qid] = items.map((it) => ({
-        name: it.name,
-        size: it.size,
-        type: it.type,
-        path: it.path,
-        url: it.url,
-      }));
+    if (hasUploadingFiles) {
+      setError(
+        "Please wait for all files to finish uploading before continuing."
+      );
+      setSaveFlash(null);
+      return;
     }
 
+    // Block moving to next step if any required is unanswered
+    if (requiredUnanswered.length > 0) {
+      const firstMissing = requiredUnanswered[0];
+      setError("Please answer all required questions before continuing.");
+      scrollToQuestion(firstMissing.id);
+      setSaveFlash(null);
+      return;
+    }
+
+    setSubmitting(true);
+    setSaveFlash("Saving…");
+
+    // answers already contain file URLs / paths
+    const answersToSend: Answers = { ...answers };
+    const sid = sessionId != null ? Number(sessionId) : undefined;
+
     try {
-      const sid = sessionId != null ? Number(sessionId) : undefined;
       if (sid && Number.isFinite(sid) && sid > 0) {
-        // persist answers in backend
         await saveRafAnswersApi(sid, slug, answersToSend);
       }
 
-      // also persist a "last_raf" snapshot for extra safety
       try {
         localStorage.setItem(
           "last_raf",
@@ -992,7 +975,7 @@ export default function RafStep() {
                   Medical questions progress
                 </span>
                 <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-slate-700">
-                  {remainingRequired} left
+                  {remainingRequired} required left
                 </span>
               </div>
               <div
@@ -1086,17 +1069,15 @@ export default function RafStep() {
 
           {!loading && questionsInSection.length > 0 && (
             <>
-              {/* Section navigation (inside card, TOP ONLY) */}
+              {/* Section header in card */}
               {sections.order.length > 1 && (
-                <div className="mb-4 flex items-center justify_between text-xs sm:text-sm">
+                <div className="mb-4 flex items-center justify-between text-xs sm:text-sm">
                   <div className="flex items-center gap-2 text-slate-700">
                     <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-100 text-[11px] font-semibold text-emerald-700">
                       {sectionIdx + 1}
                     </span>
                     <span>{currentSectionTitle}</span>
                   </div>
-
-
                 </div>
               )}
 
@@ -1107,8 +1088,6 @@ export default function RafStep() {
                     q={q}
                     value={answers[q.id]}
                     onChange={(v) => onChange(q.id, v)}
-                    fileStash={fileStash}
-                    setFileStash={setFileStash}
                   />
                 ))}
               </div>
@@ -1137,7 +1116,7 @@ export default function RafStep() {
                   type="button"
                   onClick={() => setSectionIdx((i) => Math.max(0, i - 1))}
                   disabled={sectionIdx === 0}
-                  className="rounded-full border  border-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40"
+                  className="rounded-full border  border-slate-200 px-3 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Previous section
                 </button>
@@ -1148,8 +1127,18 @@ export default function RafStep() {
                       Math.min(sections.order.length - 1, i + 1)
                     )
                   }
-                  disabled={sectionIdx >= sections.order.length - 1}
-                  className="rounded-full border bg-emerald-500 border-slate-200 px-3 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-40"
+                  disabled={
+                    sectionIdx >= sections.order.length - 1 ||
+                    requiredUnansweredInSection.length > 0
+                  }
+                  title={
+                    sectionIdx >= sections.order.length - 1
+                      ? undefined
+                      : requiredUnansweredInSection.length > 0
+                      ? "Answer all required questions in this section first"
+                      : undefined
+                  }
+                  className="rounded-full border bg-emerald-500 border-slate-200 px-3 py-1 text-xs text-white hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Next section
                 </button>
@@ -1157,14 +1146,14 @@ export default function RafStep() {
               <button
                 type="button"
                 onClick={onSubmit}
-                disabled={submitting}
+                disabled={submitting || hasUploadingFiles}
                 className={`inline-flex items-center justify-center rounded-full px-5 py-2 text-xs font-semibold text-white shadow-sm ${
-                  submitting
+                  submitting || hasUploadingFiles
                     ? "bg-emerald-300 cursor-not-allowed opacity-80"
                     : "bg-emerald-600 hover:bg-emerald-700"
                 }`}
               >
-                {submitting ? "Saving…" : "Save"}
+                {submitting ? "Saving…" : "Save & continue"}
               </button>
             </div>
           </footer>
@@ -1182,18 +1171,16 @@ function QuestionField({
   q,
   value,
   onChange,
-  fileStash,
-  setFileStash,
 }: {
   q: Question;
   value: any;
   onChange: (v: any) => void;
-  fileStash: Record<string, File[]>;
-  setFileStash: Dispatch<SetStateAction<Record<string, File[]>>>;
 }) {
   const base =
     "block w-full rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500 bg-white";
 
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   /* ----- Layout-only elements (no answer) ----- */
 
   if (q.type === "divider") {
@@ -1430,22 +1417,80 @@ function QuestionField({
             accept={q.accept ?? "image/*,application/pdf"}
             multiple={!!q.multiple}
             className="mt-1 block w-full text-xs file:mr-3 file:rounded-xl file:border file:border-slate-200 file:bg-white file:px-3 file:py-2 file:text-xs file:font-medium file:text-slate-700 hover:file:bg-slate-50"
-            onChange={(e) => {
+            onChange={async (e) => {
+              setUploadError(null);
               const list = Array.from(e.target.files || []);
+              if (!list.length) {
+                onChange([]);
+                return;
+              }
+
               const max = 10 * 1024 * 1024; // 10MB
               const kept = list.filter((f) => f.size <= max);
-              setFileStash((prev) => ({
-                ...prev,
-                [q.id]: kept,
-              }));
-              const meta = kept.map((f) => ({
-                name: f.name,
-                size: f.size,
-                type: f.type || "file",
-              }));
-              onChange(meta);
+
+              if (!kept.length) {
+                setUploadError("Each file must be 10MB or smaller.");
+                onChange([]);
+                return;
+              }
+
+              // Optimistic local state: mark as uploading
+              onChange(
+                kept.map<UploadedFile>((f) => ({
+                  name: f.name,
+                  size: f.size,
+                  type: f.type || "file",
+                  uploading: true,
+                }))
+              );
+
+              setUploading(true);
+              try {
+                const uploaded: UploadedFile[] = [];
+
+                for (const f of kept) {
+                  try {
+                    // Use your page image upload API instead of the old RAF upload
+                    const res: any = await uploadPageImageApi(f);
+
+                    // Try to be flexible with response shape
+                    const url = res?.url ?? res?.data?.url ?? res?.location; // add any other key you use
+                    const path = res?.path ?? res?.data?.path ?? res?.key; // add any other key you use
+
+                    if (url) {
+                      uploaded.push({
+                        name: f.name,
+                        size: f.size,
+                        type: f.type || "file",
+                        path,
+                        url,
+                      });
+                    } else {
+                      setUploadError(
+                        res?.message ||
+                          "A file failed to upload. Please try again."
+                      );
+                    }
+                  } catch {
+                    setUploadError(
+                      "A file failed to upload due to a network error. Please try again."
+                    );
+                  }
+                }
+
+                if (uploaded.length) {
+                  // Final value: includes backend URL / path
+                  onChange(uploaded);
+                } else {
+                  // All failed – clear value
+                  onChange([]);
+                }
+              } finally {
+                setUploading(false);
+              }
             }}
           />
+
           {Array.isArray(value) && value.length > 0 && (
             <ul className="text-xs text-slate-600">
               {value.map((f: any, i: number) => (
@@ -1454,15 +1499,22 @@ function QuestionField({
                   {typeof f.size === "number"
                     ? `(${Math.round(f.size / 1024)} KB)`
                     : ""}
+                  {f.url ? " – uploaded" : f.uploading ? " – uploading…" : ""}
                 </li>
               ))}
             </ul>
           )}
-          {fileStash[q.id]?.length ? (
-            <div className="text-[11px] text-slate-500">
-              Files queued – they&apos;ll upload when you continue.
-            </div>
-          ) : null}
+
+          {uploading && (
+            <p className="text-[11px] text-slate-500">
+              Uploading file(s)… please wait.
+            </p>
+          )}
+
+          {uploadError && (
+            <p className="text-[11px] text-rose-500">{uploadError}</p>
+          )}
+
           {!q.helpText && (
             <p className="text-[11px] text-slate-500">
               Max 10MB. PDF or image files.

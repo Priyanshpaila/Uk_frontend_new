@@ -2,15 +2,12 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
-import { useParams } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { ArrowLeft, CheckCircle2 } from "lucide-react";
 
 import Container from "@/components/ui/Container";
 import { useAuth } from "@/components/auth/AuthProvider";
-import {
-  fetchServiceBySlug,
-  type ServiceDetail,
-} from "@/lib/api";
+import { fetchServiceBySlug, type ServiceDetail } from "@/lib/api";
 import toast from "react-hot-toast";
 import { useCart } from "@/components/cart/cart-context";
 
@@ -132,9 +129,10 @@ export default function BookServicePage() {
   const slug = params?.slug ?? "";
 
   const { user } = useAuth();
-
-  // 🔐 "Logged in" is now *only* based on AuthProvider user state
   const isLoggedIn = !!user;
+
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
   // Cart info for gating + summary (raw, from context)
   const cart = useCart() as any;
@@ -164,8 +162,7 @@ export default function BookServicePage() {
     () => (isLoggedIn ? BASE_FLOW.filter((s) => s !== "login") : BASE_FLOW),
     [isLoggedIn]
   );
-  const [currentStep, setCurrentStep] =
-    React.useState<StepKey>("treatments");
+  const [currentStep, setCurrentStep] = React.useState<StepKey>("treatments");
 
   /* ---------- Load service detail (by slug) & store service_id locally ----- */
 
@@ -207,51 +204,45 @@ export default function BookServicePage() {
     };
   }, [slug]);
 
-  /* ---------- Restore current step from localStorage on mount ---------- */
+  /* ---------- Restore current step from URL (?step=) or localStorage ------- */
 
   React.useEffect(() => {
-    if (typeof window === "undefined") return;
     if (!slug) return;
 
-    try {
-      const raw = window.localStorage.getItem(STEP_STORAGE_KEY(slug));
-      if (!raw) return;
+    // 1) Try from URL
+    const rawFromQuery = (searchParams.get("step") || "") as StepKey;
+    let step: StepKey | null = null;
 
-      const allSteps: StepKey[] = [
-        "treatments",
-        "login",
-        "raf",
-        "calendar",
-        "payment",
-        "success",
-      ];
-
-      if (!allSteps.includes(raw as StepKey)) return;
-
-      let step = raw as StepKey;
-
-      // If user is logged in, never land on login step
-      if (isLoggedIn && step === "login") {
-        const idxInBase = BASE_FLOW.indexOf("login");
-        step = (BASE_FLOW[idxInBase + 1] ?? "treatments") as StepKey;
+    if (rawFromQuery && BASE_FLOW.includes(rawFromQuery)) {
+      step = rawFromQuery;
+    } else if (typeof window !== "undefined") {
+      // 2) Fallback to localStorage
+      const persisted = window.localStorage.getItem(STEP_STORAGE_KEY(slug));
+      if (persisted && BASE_FLOW.includes(persisted as StepKey)) {
+        step = persisted as StepKey;
       }
-
-      // If NOT logged in and we previously stored a later step,
-      // force them back to the login step
-      if (!isLoggedIn && step !== "treatments" && step !== "login") {
-        step = "login";
-      }
-
-      // Ensure this step exists in the current flow (login can be removed)
-      if (!flow.includes(step)) {
-        step = "treatments";
-      }
-
-      setCurrentStep(step);
-    } catch {
-      // ignore
     }
-  }, [slug, isLoggedIn, flow]);
+
+    // 3) Default
+    if (!step) step = "treatments";
+
+    // 4) Enforce auth rules
+    if (isLoggedIn && step === "login") {
+      const idxInBase = BASE_FLOW.indexOf("login");
+      step = (BASE_FLOW[idxInBase + 1] ?? "treatments") as StepKey;
+    }
+
+    if (!isLoggedIn && step !== "treatments" && step !== "login") {
+      step = "login";
+    }
+
+    // 5) Ensure step is in the active flow (login may be removed)
+    if (!flow.includes(step)) {
+      step = "treatments";
+    }
+
+    setCurrentStep((prev) => (prev === step ? prev : step));
+  }, [slug, isLoggedIn, flow, searchParams]);
 
   // 💾 Persist current step whenever it changes
   React.useEffect(() => {
@@ -274,14 +265,38 @@ export default function BookServicePage() {
   const prevStep: StepKey | null =
     currentIndex > 0 ? flow[currentIndex - 1] : null;
 
+  /* ---------- Central step navigation helper (keeps URL + state in sync) --- */
+
+  const goToStep = React.useCallback(
+    (step: StepKey) => {
+      if (!flow.includes(step)) return;
+
+      setCurrentStep(step);
+
+      try {
+        const sp = new URLSearchParams(searchParams.toString());
+        sp.set("step", step);
+        const qs = sp.toString();
+        const path = qs
+          ? `/private-services/${encodeURIComponent(slug)}/book?${qs}`
+          : `/private-services/${encodeURIComponent(slug)}/book`;
+
+        router.replace(path, { scroll: false });
+      } catch {
+        // ignore navigation errors
+      }
+    },
+    [flow, router, searchParams, slug]
+  );
+
   // If user becomes logged in while on "login" step, jump forward
   React.useEffect(() => {
     if (isLoggedIn && currentStep === "login") {
       const idxInBase = BASE_FLOW.indexOf("login");
-      const afterLogin = BASE_FLOW[idxInBase + 1] ?? "treatments"; // usually "raf"
-      setCurrentStep(afterLogin);
+      const afterLogin = (BASE_FLOW[idxInBase + 1] ?? "treatments") as StepKey;
+      goToStep(afterLogin);
     }
-  }, [isLoggedIn, currentStep]);
+  }, [isLoggedIn, currentStep, goToStep]);
 
   // 🔄 When user reaches the final "success" step, clear old booking/order state
   React.useEffect(() => {
@@ -326,13 +341,12 @@ export default function BookServicePage() {
       return;
     }
 
-    // ❌ No order creation here anymore
-    setCurrentStep(nextStep);
+    goToStep(nextStep);
   };
 
   const handlePrev = () => {
     if (!prevStep) return;
-    setCurrentStep(prevStep);
+    goToStep(prevStep);
   };
 
   const maxClickableIndex = currentIndex; // cannot skip ahead
@@ -349,19 +363,6 @@ export default function BookServicePage() {
     (currentStep === "login" && !isLoggedIn);
 
   /* ---------- Render ---------- */
-
-  const CurrentStepComponent =
-    currentStep === "treatments"
-      ? TreatmentsStep
-      : currentStep === "login"
-      ? LoginStep
-      : currentStep === "raf"
-      ? RafStep
-      : currentStep === "calendar"
-      ? CalendarStep
-      : currentStep === "payment"
-      ? PaymentStep
-      : SuccessStep;
 
   return (
     <main className="min-h-screen bg-pharmacy-bg py-6 md:py-10">
@@ -407,7 +408,7 @@ export default function BookServicePage() {
                     type="button"
                     disabled={disabled}
                     onClick={() => {
-                      if (!disabled) setCurrentStep(step);
+                      if (!disabled) goToStep(step);
                     }}
                     className={[
                       "flex-1 min-w-[80px] rounded-2xl px-3 py-2 flex items-center justify-center gap-1.5 font-medium transition",
@@ -462,12 +463,33 @@ export default function BookServicePage() {
             {/* Step content */}
             <div className="mt-2 rounded-2xl border border-slate-100 bg-slate-50/60 p-3 md:p-4">
               {serviceLoading ? (
-                <div className="h-32 animate-pulse rounded-2xl bg-slate-100" />
+                <div className="space-y-2 animate-pulse">
+                  <div className="h-3 w-40 rounded bg-slate-200" />
+                  <div className="h-3 w-full rounded bg-slate-200" />
+                  <div className="h-3 w-5/6 rounded bg-slate-200" />
+                </div>
               ) : (
-                <CurrentStepComponent
-                  serviceSlug={slug}
-                  autoContinue={currentStep === "treatments"}
-                />
+                <>
+                  {currentStep === "treatments" && (
+                    <TreatmentsStep serviceSlug={slug} />
+                  )}
+
+                  {currentStep === "login" && <LoginStep />}
+
+                  {currentStep === "raf" && <RafStep />}
+
+                  {currentStep === "calendar" && (
+                    <CalendarStep serviceSlug={slug} />
+                  )}
+
+                  {currentStep === "payment" && (
+                    <PaymentStep serviceSlug={slug} />
+                  )}
+
+                  {currentStep === "success" && (
+                    <SuccessStep serviceSlug={slug} />
+                  )}
+                </>
               )}
             </div>
 
@@ -475,8 +497,8 @@ export default function BookServicePage() {
             {currentStep !== "success" && (
               <div className="mt-5 flex flex-col justify-between gap-3 border-t border-slate-200 pt-3 text-xs md:flex-row md:items-center">
                 <div className="text-[11px] text-slate-500">
-                  Please complete each step carefully. You can&apos;t skip
-                  ahead without finishing the current step.
+                  Please complete each step carefully. You can&apos;t skip ahead
+                  without finishing the current step.
                 </div>
                 <div className="flex justify-end gap-2">
                   <button

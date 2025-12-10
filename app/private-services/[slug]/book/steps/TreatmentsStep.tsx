@@ -267,11 +267,6 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
           </div>
         </div>
 
-        <div className="text-right text-[11px] text-slate-500">
-          {item.outOfStock || variationOutOfStock
-            ? "Out of stock"
-            : `In stock: ${stockQty || 0}`}
-        </div>
       </div>
 
       {/* Variation selector */}

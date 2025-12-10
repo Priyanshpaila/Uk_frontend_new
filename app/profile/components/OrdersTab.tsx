@@ -184,17 +184,20 @@ export default function OrdersTab() {
                           <Stethoscope className="h-3.5 w-3.5 text-slate-500" />
                           <span>Items in this order</span>
                         </div>
-                        <ul className="space-y-1.5">
+
+                        {/* 👇 inline-block so the UL only gets as wide as its content */}
+                        <ul className="space-y-1.5 inline-block">
                           {(order.meta?.lines || []).map((line) => (
                             <li
                               key={line.index}
-                              className="flex items-center justify-between"
+                              className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-6"
                             >
                               <span className="text-slate-700">
                                 {line.name}
                                 {line.variation ? ` (${line.variation})` : ""}
                               </span>
-                              <span className="text-slate-500">
+
+                              <span className="text-slate-500 text-right">
                                 × {line.qty}
                               </span>
                             </li>
