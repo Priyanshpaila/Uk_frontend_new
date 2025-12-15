@@ -37,7 +37,7 @@ export function getBackendBase(): string {
   const parts = hostname.split(".");
 
   // For this project you want length >= 2 to count as "has subdomain"
-  const hasSubdomain = parts.length >= 5;
+  const hasSubdomain = parts.length >= 4;
 
   if (!hasSubdomain) {
     return resolveBaseForNoSubdomain(protocol);

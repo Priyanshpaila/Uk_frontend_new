@@ -745,7 +745,7 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
 
           <div className="flex flex-col items-start gap-1 text-xs md:items-end md:text-sm">
             <span className="rounded-full bg-black/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-50">
-              Invoice &amp; booking summary
+             Booking summary
             </span>
             {effectiveRef && (
               <span className="text-emerald-50/90">
@@ -1003,8 +1003,8 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
           </div>
 
           <p className="text-[11px] text-slate-500">
-            You can safely close this page once you&apos;ve saved or printed it.
-            A copy of this invoice and your booking details will also be
+            You can safely close this page now.
+            A copy of your booking details will also be
             available in your account.
           </p>
         </section>
