@@ -15,7 +15,7 @@ const nextConfig = {
 
       // ⬇️ Root live backend
       {
-        protocol: "http", // use https if your backend is https
+        protocol: "https", // use https if your backend is https
         hostname: "safescript.co.uk",
         port: "",
         pathname: "/upload/**",
@@ -23,7 +23,7 @@ const nextConfig = {
 
       // ⬇️ Any subdomain like pri.safescript.co.uk, abc.safescript.co.uk, etc.
       {
-        protocol: "http",
+        protocol: "https",
         hostname: "**.safescript.co.uk",
         port: "",
         pathname: "/upload/**",

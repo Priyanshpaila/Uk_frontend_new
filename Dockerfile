@@ -59,8 +59,8 @@ WORKDIR /app
 # WORKDIR /app
 
 ENV PORT=8002
-ENV NEXT_PUBLIC_BASE_URL=http://backend.pharma-health.co.uk/api
-ENV NEXT_PUBLIC_ONLY_URL=backend.pharma-health.co.uk/api
+ENV NEXT_PUBLIC_BASE_URL=https://safescript.co.uk/api
+ENV NEXT_PUBLIC_ONLY_URL=safescript.co.uk/api
 
 
 
@@ -86,10 +86,10 @@ CMD ["npm", "run", "start"]
 
 
 
-# docker build  --no-cache -t 192.168.13.72:5000/userukproject_new_11_dec_2025_latest .      
-# docker run -d --name userukproject_new_11_dec_2025_latest -p 80:80 userukproject_new_11_dec_2025_latest_image
+# docker build  --no-cache -t 192.168.13.72:5000/userukproject_new_15_dec_2025_latest .      
+# docker run -d --name userukproject_new_15_dec_2025_latest -p 80:80 userukproject_new_15_dec_2025_latest_image
 
-# docker tag userukproject_new_11_dec_2025_latest_image 192.168.13.72:5000/userukproject_new_11_dec_2025_latest
-# docker push 192.168.13.72:5000/userukproject_new_11_dec_2025_latest
-# docker pull 192.168.13.72:5000/userukproject_new_11_dec_2025_latest
-# docker run -d --name userukproject_new_11_dec_2025_latest -p 8002:8002 192.168.13.72:5000/userukproject_new_11_dec_2025_latest
+# docker tag userukproject_new_15_dec_2025_latest_image 192.168.13.72:5000/userukproject_new_15_dec_2025_latest
+# docker push 192.168.13.72:5000/userukproject_new_15_dec_2025_latest
+# docker pull 192.168.13.72:5000/userukproject_new_15_dec_2025_latest
+# docker run -d --name userukproject_new_15_dec_2025_latest -p 8002:8002 192.168.13.72:5000/userukproject_new_15_dec_2025_latest
