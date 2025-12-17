@@ -169,6 +169,15 @@ export type RegisterPatientPayload = {
   county: string;
   postalcode: string;
   country: string;
+
+  // ✅ NEW: Shipping address (optional)
+  use_alt_delivery?: boolean; // if true, use shipping_* instead of home address
+  shipping_address_line1?: string;
+  shipping_address_line2?: string;
+  shipping_city?: string;
+  shipping_county?: string;
+  shipping_postalcode?: string;
+  shipping_country?: string;
 };
 
 /**
@@ -178,11 +187,32 @@ export type RegisterPatientPayload = {
 export async function registerPatientApi(payload: RegisterPatientPayload) {
   const base = getBackendBase();
 
-  const body = {
+  const hasShipping =
+    !!payload.use_alt_delivery ||
+    !!payload.shipping_address_line1 ||
+    !!payload.shipping_address_line2 ||
+    !!payload.shipping_city ||
+    !!payload.shipping_county ||
+    !!payload.shipping_postalcode ||
+    !!payload.shipping_country;
+
+  const body: any = {
     ...payload,
     email_verified: payload.email_verified ?? false,
     is_patient: true,
   };
+
+  // ✅ Add a single object too (backend can consume either flat fields or object)
+  if (hasShipping) {
+    body.shipping_address = {
+      address_line1: payload.shipping_address_line1 || "",
+      address_line2: payload.shipping_address_line2 || "",
+      city: payload.shipping_city || "",
+      county: payload.shipping_county || "",
+      postalcode: payload.shipping_postalcode || "",
+      country: payload.shipping_country || "United Kingdom",
+    };
+  }
 
   return jsonFetch<any>(`${base}/auth/register`, {
     method: "POST",
@@ -301,13 +331,34 @@ export type LoggedInUser = {
   gender: string;
   email: string;
   phone: string;
-  dob?: string; // ISO string
+  dob?: string;
+
   address_line1?: string;
   address_line2?: string;
   city?: string;
   county?: string;
   postalcode?: string;
   country?: string;
+
+  // ✅ NEW: Shipping / delivery address (optional)
+  use_alt_delivery?: boolean;
+  shipping_address_line1?: string;
+  shipping_address_line2?: string;
+  shipping_city?: string;
+  shipping_county?: string;
+  shipping_postalcode?: string;
+  shipping_country?: string;
+
+  // (optional) if backend returns nested object, keep it too
+  shipping_address?: {
+    address_line1?: string;
+    address_line2?: string;
+    city?: string;
+    county?: string;
+    postalcode?: string;
+    country?: string;
+  };
+
   createdAt?: string;
   updatedAt?: string;
   [key: string]: any;
@@ -330,6 +381,8 @@ export async function getLoggedInUserApi(): Promise<LoggedInUser> {
   console.log("Fetched user data from /users/me:", data);
 
   const raw: any = (data as any).user ?? data;
+  const ship =
+    raw.shipping_address ?? raw.delivery_address ?? raw.delivery ?? {};
 
   const fullName: string = raw.name ?? "";
   const [firstFromName, ...restName] = fullName.split(" ").filter(Boolean);
@@ -355,6 +408,55 @@ export async function getLoggedInUserApi(): Promise<LoggedInUser> {
     postalcode: raw.postalcode ?? raw.postcode ?? raw.zip ?? "",
     country: raw.country ?? "United Kingdom",
 
+    use_alt_delivery:
+      raw.use_alt_delivery ??
+      raw.useAltDelivery ??
+      raw.use_alt_delivery_address ??
+      false,
+
+    shipping_address_line1:
+      raw.shipping_address_line1 ??
+      raw.delivery_address1 ??
+      raw.delivery_address_line1 ??
+      ship.address_line1 ??
+      ship.address1 ??
+      "",
+
+    shipping_address_line2:
+      raw.shipping_address_line2 ??
+      raw.delivery_address2 ??
+      raw.delivery_address_line2 ??
+      ship.address_line2 ??
+      ship.address2 ??
+      "",
+
+    shipping_city: raw.shipping_city ?? raw.delivery_city ?? ship.city ?? "",
+
+    shipping_county:
+      raw.shipping_county ??
+      raw.delivery_county ??
+      raw.delivery_state ??
+      ship.county ??
+      ship.state ??
+      "",
+
+    shipping_postalcode:
+      raw.shipping_postalcode ??
+      raw.delivery_postcode ??
+      raw.delivery_postalcode ??
+      ship.postalcode ??
+      ship.postcode ??
+      ship.zip ??
+      "",
+
+    shipping_country:
+      raw.shipping_country ??
+      raw.delivery_country ??
+      ship.country ??
+      "United Kingdom",
+
+    shipping_address: raw.shipping_address ?? undefined,
+
     createdAt: raw.createdAt,
     updatedAt: raw.updatedAt,
   };
@@ -376,6 +478,13 @@ export type UpdatePatientPayload = {
   county?: string;
   postalcode?: string;
   country?: string;
+  use_alt_delivery?: boolean;
+  shipping_address_line1?: string;
+  shipping_address_line2?: string;
+  shipping_city?: string;
+  shipping_county?: string;
+  shipping_postalcode?: string;
+  shipping_country?: string;
 };
 
 /**
@@ -406,6 +515,56 @@ export async function updatePatientApi(
     const last = payload.lastName ?? "";
     const name = `${first} ${last}`.trim();
     if (name) bodyToSend.name = name;
+  }
+
+  if (payload.use_alt_delivery !== undefined) {
+    bodyToSend.use_alt_delivery = payload.use_alt_delivery;
+  }
+
+  if (payload.shipping_address_line1 !== undefined) {
+    bodyToSend.shipping_address_line1 = payload.shipping_address_line1;
+    bodyToSend.delivery_address1 = payload.shipping_address_line1; // legacy alias (optional)
+  }
+  if (payload.shipping_address_line2 !== undefined) {
+    bodyToSend.shipping_address_line2 = payload.shipping_address_line2;
+    bodyToSend.delivery_address2 = payload.shipping_address_line2; // legacy alias (optional)
+  }
+  if (payload.shipping_city !== undefined) {
+    bodyToSend.shipping_city = payload.shipping_city;
+    bodyToSend.delivery_city = payload.shipping_city; // legacy alias (optional)
+  }
+  if (payload.shipping_county !== undefined) {
+    bodyToSend.shipping_county = payload.shipping_county;
+    bodyToSend.delivery_county = payload.shipping_county; // legacy alias (optional)
+  }
+  if (payload.shipping_postalcode !== undefined) {
+    bodyToSend.shipping_postalcode = payload.shipping_postalcode;
+    bodyToSend.delivery_postcode = payload.shipping_postalcode; // legacy alias (optional)
+  }
+  if (payload.shipping_country !== undefined) {
+    bodyToSend.shipping_country = payload.shipping_country;
+    bodyToSend.delivery_country = payload.shipping_country; // legacy alias (optional)
+  }
+
+  // Also send a single nested object if any shipping field is present (optional but useful)
+  const hasShipping =
+    payload.use_alt_delivery ||
+    payload.shipping_address_line1 ||
+    payload.shipping_address_line2 ||
+    payload.shipping_city ||
+    payload.shipping_county ||
+    payload.shipping_postalcode ||
+    payload.shipping_country;
+
+  if (hasShipping) {
+    bodyToSend.shipping_address = {
+      address_line1: payload.shipping_address_line1 || "",
+      address_line2: payload.shipping_address_line2 || "",
+      city: payload.shipping_city || "",
+      county: payload.shipping_county || "",
+      postalcode: payload.shipping_postalcode || "",
+      country: payload.shipping_country || "United Kingdom",
+    };
   }
 
   return jsonFetch<LoggedInUser>(`${base}/users/${userId}`, {
@@ -443,16 +602,39 @@ export type OrderLine = {
   name: string;
   qty: number;
   variation?: string | null;
+
+  // ✅ keep minor (canonical)
+  unitMinor: number; // e.g. £12.34 => 1234
+  totalMinor: number; // unitMinor * qty
+
+  // ✅ add major (ready to display)
+  price: number; // unit price in major units (e.g. 12.34)
+  line_total: number; // line total in major units (e.g. 24.68)
+
+  sku?: string;
 };
 
 export type OrderMeta = {
   lines?: OrderLine[];
+
+  // ✅ keep minor (canonical)
+  subtotalMinor?: number;
+  feesMinor?: number;
   totalMinor?: number;
+
+  // ✅ add major (ready to display)
+  subtotal?: number; // major units
+  fees?: number; // major units
+  total?: number; // major units
+
+  currency?: string; // e.g. "GBP"
+
   service_slug?: string;
   service?: string;
   appointment_start_at?: string;
   payment_status?: string;
-  // ...anything else you care about
+
+  [key: string]: any;
 };
 
 export type OrderDto = {
@@ -465,16 +647,21 @@ export type OrderDto = {
   schedule_id?: string;
   appointment_status?: string;
   is_appointment_booked?: boolean;
+
   first_name?: string;
   last_name?: string;
   email?: string;
+
   start_at?: string;
   end_at?: string;
+
   patient_name?: string;
   service_slug?: string;
   service_name?: string;
+
   createdAt?: string;
   updatedAt?: string;
+
   meta?: OrderMeta;
 };
 
@@ -522,7 +709,7 @@ export type CreateOrderPayload = {
   end_at: string;
   meta?: OrderMeta;
   payment_status?: string;
-  order_type?: string; // 🔹 NEW (optional, defaults to "new")
+  order_type?: string; // optional, defaults to "new"
 };
 
 export async function createOrderApi(
@@ -530,14 +717,9 @@ export async function createOrderApi(
 ): Promise<OrderDto> {
   const base = getBackendBase();
 
-  // 🔹 Ensure we always send order_type: "new" by default
-  const bodyToSend: any = {
-    ...payload,
-  };
-
-  if (!bodyToSend.order_type) {
-    bodyToSend.order_type = "new";
-  }
+  // Ensure we always send order_type: "new" by default
+  const bodyToSend: any = { ...payload };
+  if (!bodyToSend.order_type) bodyToSend.order_type = "new";
 
   return jsonFetch<OrderDto>(`${base}/orders`, {
     method: "POST",
@@ -547,7 +729,6 @@ export async function createOrderApi(
 
 /**
  * PUT /orders/:id
- * (same shape as create, but all fields optional so you can just send what you want to change)
  */
 export type UpdateOrderPayload = Partial<CreateOrderPayload> & {
   status?: string;
@@ -568,18 +749,13 @@ export async function updateOrderApi(
 
 /**
  * GET /orders/:id
- * Example: http://localhost:8000/api/orders/693671185a2bf42054669227
  */
 export async function getOrderByIdApi(orderId: string): Promise<OrderDto> {
   const base = getBackendBase();
 
-  // use GET (jsonFetch already adds auth headers etc.)
-  return jsonFetch<OrderDto>(
-    `${base}/orders/${encodeURIComponent(orderId)}`,
-    {
-      method: "GET",
-    }
-  );
+  return jsonFetch<OrderDto>(`${base}/orders/${encodeURIComponent(orderId)}`, {
+    method: "GET",
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -2011,7 +2187,6 @@ export async function createAppointmentApi(
   });
 }
 
-
 /* ------------------------------------------------------------------ */
 /*                     Dynamic storefront home page                    */
 /* ------------------------------------------------------------------ */
@@ -2056,7 +2231,6 @@ export type DynamicHomePageContent = {
   [key: string]: any;
 };
 
-
 /**
  * GET /dynamicHomePages/:slug
  * Public endpoint for the storefront (dynamic UI content).
@@ -2078,7 +2252,6 @@ export async function fetchDynamicHomePage(
     }
   );
 }
-
 
 /* ------------------------------------------------------------------ */
 /*                             Email send API                         */
@@ -2144,7 +2317,6 @@ export async function sendEmailApi(
 
   return data as SendEmailResult;
 }
-
 
 /* ------------------------------------------------------------------ */
 /*                          NHS register API                          */
@@ -2227,13 +2399,12 @@ export async function nhsRegisterApi(
   });
 }
 
-
 /* ------------------------------------------------------------------ */
 /*                       Page image upload API                        */
 /* ------------------------------------------------------------------ */
 
 export type UploadPageImageResult = {
-  url: string;      // e.g. "/upload/pages/page-1765360105968-434476082.jpg"
+  url: string; // e.g. "/upload/pages/page-1765360105968-434476082.jpg"
   filename: string; // e.g. "pexels-anntarazevich-5629205.jpg"
   [key: string]: any;
 };

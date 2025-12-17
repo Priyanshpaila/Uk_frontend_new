@@ -21,6 +21,8 @@ import {
   buildRafQAFromStorage,
   fetchBookedSlotsApi,
   type BookedSlotsResponse,
+  getLoggedInUserApi,
+  type LoggedInUser,
 } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
@@ -127,22 +129,73 @@ function readRafFormId(slug: string): string | null {
   return null;
 }
 
+function minorToMajor(minor: number): number {
+  const n = Number(minor || 0);
+  return Math.round((n / 100) * 100) / 100;
+}
+
+function resolveShippingFromUser(user: LoggedInUser | null) {
+  const u: any = user || {};
+  const shipLine1 =
+    (u.shipping_address_line1 || u.shippingAddressLine1 || "").trim();
+  const shipCity = (u.shipping_city || u.shippingCity || "").trim();
+  const shipPost = (u.shipping_postalcode || u.shippingPostalcode || "").trim();
+
+  const hasShipping =
+    !!shipLine1 || !!shipCity || !!shipPost || !!u.shipping_country;
+
+  const shipping = {
+    shipping_address_line1: hasShipping
+      ? shipLine1
+      : (u.address_line1 || "").trim(),
+    shipping_address_line2: hasShipping
+      ? (u.shipping_address_line2 || u.shippingAddressLine2 || "").trim()
+      : (u.address_line2 || "").trim(),
+    shipping_city: hasShipping
+      ? (u.shipping_city || u.shippingCity || "").trim()
+      : (u.city || "").trim(),
+    shipping_county: hasShipping
+      ? (u.shipping_county || u.shippingCounty || "").trim()
+      : (u.county || "").trim(),
+    shipping_postalcode: hasShipping
+      ? (u.shipping_postalcode || u.shippingPostalcode || "").trim()
+      : (u.postalcode || "").trim(),
+    shipping_country: hasShipping
+      ? (u.shipping_country || u.shippingCountry || "").trim()
+      : (u.country || "UK").trim(),
+    shipping_is_different: hasShipping,
+  };
+
+  return shipping;
+}
+
 function buildOrderMeta(opts: {
   cartItems: any[];
   serviceSlug: string;
   serviceName?: string;
   appointmentIso: string;
+  user?: LoggedInUser | null;
+  currency?: string;
 }) {
+  const currency = (opts.currency || "GBP").toUpperCase();
+
   const items = (opts.cartItems || []).map((ci: any) => {
+    const qty = Math.max(1, Number(ci.qty || 1));
+
     const unitMinor =
       typeof ci.unitMinor === "number"
         ? ci.unitMinor
+        : typeof ci.priceMinor === "number"
+        ? ci.priceMinor
         : ci.price
         ? Math.round(Number(ci.price) * 100)
         : 0;
-    const qty = Number(ci.qty || 1);
+
     const totalMinor =
       typeof ci.totalMinor === "number" ? ci.totalMinor : unitMinor * qty;
+
+    const price = minorToMajor(unitMinor);
+    const line_total = minorToMajor(totalMinor);
 
     const variation =
       ci.variation ||
@@ -153,13 +206,15 @@ function buildOrderMeta(opts: {
       "";
 
     return {
-      sku: ci.sku,
+      sku: ci.sku || undefined,
       name: ci.name,
       variations: variation || null,
       strength: ci.strength ?? null,
       qty,
       unitMinor,
       totalMinor,
+      price,
+      line_total,
       variation: variation || null,
     };
   });
@@ -168,28 +223,58 @@ function buildOrderMeta(opts: {
     index,
     name: it.name,
     qty: it.qty,
-    variation: it.variation || it.variations || "",
+    variation: it.variation || it.variations || null,
+
+    // ✅ add pricing on each line (minor + major)
+    unitMinor: it.unitMinor,
+    totalMinor: it.totalMinor,
+    price: it.price,
+    line_total: it.line_total,
+
+    sku: it.sku,
   }));
 
-  const totalMinor = items.reduce(
+  const subtotalMinor = items.reduce(
     (sum: number, it: any) => sum + (it.totalMinor || 0),
     0
   );
+  const feesMinor = 0;
+  const totalMinor = subtotalMinor + feesMinor;
+
+  const subtotal = minorToMajor(subtotalMinor);
+  const fees = minorToMajor(feesMinor);
+  const total = minorToMajor(totalMinor);
 
   const sessionId = getConsultationSessionId();
   const rafQA = buildRafQAFromStorage(opts.serviceSlug);
   const rafFormId = readRafFormId(opts.serviceSlug);
 
+  const shipping = resolveShippingFromUser(opts.user ?? null);
+
   const meta: any = {
     type: "new",
+
+    // ✅ pricing (canonical minor + ready-to-display major)
     lines,
     items,
+    subtotalMinor,
+    feesMinor,
     totalMinor,
+    subtotal,
+    fees,
+    total,
+    currency,
+
+    // ✅ order context
     service_slug: opts.serviceSlug,
     service: opts.serviceName || opts.serviceSlug,
     appointment_start_at: opts.appointmentIso,
     consultation_session_id: sessionId ?? undefined,
     payment_status: "pending",
+
+    // ✅ shipping address snapshot on order
+    ...shipping,
+
     formsQA: {
       raf: {
         form_id: rafFormId || null,
@@ -208,6 +293,9 @@ function buildOrderMeta(opts: {
       qty: first.qty,
       unitMinor: first.unitMinor,
       totalMinor: first.totalMinor,
+      price: first.price,
+      line_total: first.line_total,
+      currency,
     };
   }
 
@@ -296,16 +384,12 @@ export default function CalendarStep({
 
       const ovSlug = ov.service_slug || ov.serviceSlug || null;
 
-      // If override is tied to a slug and it doesn't match, skip it
       if (ovSlug && ovSlug !== slug) return false;
 
-      // If override is tied to a service id and it doesn't match, skip it
       if (ovServiceId && currentServiceId) {
         if (String(ovServiceId) !== String(currentServiceId)) return false;
       }
 
-      // If override has no service binding, we treat it as "global"
-      // and let it apply to all services on this schedule.
       return true;
     });
 
@@ -475,7 +559,6 @@ export default function CalendarStep({
       return;
     }
 
-    // If we already created an appointment for this exact slot, block duplicates
     if (hasCreatedAppointment) {
       setAppointmentError(
         "An appointment has already been created for this time."
@@ -496,6 +579,14 @@ export default function CalendarStep({
       return;
     }
 
+    // ✅ fetch user profile once so we can snapshot shipping address into order meta
+    let userProfile: LoggedInUser | null = null;
+    try {
+      userProfile = await getLoggedInUserApi();
+    } catch {
+      userProfile = null; // continue without blocking
+    }
+
     const serviceIdFromLocal = readIdFromLocal([
       "service_id",
       "pe_service_id",
@@ -508,12 +599,6 @@ export default function CalendarStep({
       setAppointmentError(
         "Missing service information for this booking. Please start again from the service page."
       );
-      if (process.env.NODE_ENV !== "production") {
-        console.log(
-          "No service_id found in localStorage or schedule/cart. schedule:",
-          schedule
-        );
-      }
       return;
     }
 
@@ -529,12 +614,6 @@ export default function CalendarStep({
       setAppointmentError(
         "Missing schedule information for this booking. Please start again from the service page."
       );
-      if (process.env.NODE_ENV !== "production") {
-        console.log(
-          "No schedule_id found in localStorage or state. schedule:",
-          schedule
-        );
-      }
       return;
     }
 
@@ -548,11 +627,17 @@ export default function CalendarStep({
     const endDate = new Date(startDate.getTime() + slotMinutes * 60_000);
     const endIso = endDate.toISOString();
 
+    // ✅ meta now includes:
+    // - price + line_total on each line
+    // - subtotal/total in both minor & major
+    // - shipping address snapshot (uses user's shipping if present)
     const meta = buildOrderMeta({
       cartItems,
       serviceSlug: slug,
       serviceName: (schedule as any).name,
       appointmentIso: selectedIso,
+      user: userProfile,
+      currency: "GBP",
     });
 
     const orderPayload: any = {
@@ -563,16 +648,12 @@ export default function CalendarStep({
       end_at: endIso,
       meta,
       payment_status: "pending",
-      order_type: "new", // explicitly send "new"
+      order_type: "new",
     };
-
-    if (process.env.NODE_ENV !== "production") {
-      console.log("Creating order with payload:", orderPayload);
-    }
 
     setCreatingAppointment(true);
     try {
-      // 1) Create order
+      // 1) Create order (with price + totals + shipping in meta)
       const order = await createOrderApi(orderPayload);
       const orderId = order && (order._id || null);
 
@@ -594,14 +675,11 @@ export default function CalendarStep({
         end_at: endIso,
       };
 
-      if (process.env.NODE_ENV !== "production") {
-        console.log("Creating appointment with payload:", appointmentPayload);
-      }
-
       const appointment = await createAppointmentApi(appointmentPayload);
 
       const appointmentId =
-        (appointment && (appointment._id || appointment.id)) || null;
+        (appointment && ((appointment as any)._id || (appointment as any).id)) ||
+        null;
       const appointmentStart =
         (appointment as any)?.start_at ||
         (appointment as any)?.startAt ||
@@ -630,24 +708,20 @@ export default function CalendarStep({
             String(appointmentStart)
           );
 
-        // store "created" flag for this exact slot to prevent duplicate entries
         const key = `appointment_created.${slug}.${appointmentStart}`;
         localStorage.setItem(key, "1");
         setHasCreatedAppointment(true);
       } catch {}
 
-      // success message
       setAppointmentSuccess(
         "Appointment booked successfully. Redirecting to payment…"
       );
 
-      // If used inside the multi-step flow, just tell parent to go to payment
       if (goToPaymentStep) {
         goToPaymentStep();
         return;
       }
 
-      // Fallback: standalone usage – navigate to /book?step=payment
       const qp = new URLSearchParams();
       if (appointmentStart) qp.set("appointment_at", appointmentStart);
       qp.set("service_slug", slug);
@@ -666,7 +740,6 @@ export default function CalendarStep({
 
   const isToday = date === minDate;
 
-  // NOTE: no min-h-screen here; container height is fully content-driven
   return (
     <div className="w-full">
       <div className="mx-auto max-w-3xl rounded-3xl border border-gray-200 bg-white/95 p-6 md:p-8 shadow-soft-card">
@@ -773,7 +846,6 @@ export default function CalendarStep({
           </div>
         )}
 
-        {/* Success banner */}
         {appointmentSuccess && (
           <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">
             {appointmentSuccess}
@@ -801,7 +873,6 @@ export default function CalendarStep({
               {slots.map((s) => {
                 const isSelected = selectedIso === s.start_at;
 
-                // Find matching booked slot from backend by time (e.g. "09:00")
                 const bookedForTime =
                   bookedSlots?.slots?.find((b) => b.time === s.time) || null;
 
@@ -812,10 +883,6 @@ export default function CalendarStep({
                       typeof bookedSlots?.capacity === "number" &&
                       bookedForTime.count >= bookedSlots.capacity));
 
-                // Disable if:
-                // - slot is in the past OR
-                // - remaining <= 0 from base schedule OR
-                // - backend says this time is fully booked
                 const isDisabled =
                   !s.available || s.remaining <= 0 || isFullFromApi;
 

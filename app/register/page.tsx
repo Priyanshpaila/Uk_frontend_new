@@ -4,10 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Container from "@/components/ui/Container";
-import {
-  registerPatientApi,
-  type RegisterPatientPayload,
-} from "@/lib/api";
+import { registerPatientApi, type RegisterPatientPayload } from "@/lib/api";
 import toast from "react-hot-toast";
 
 const initialForm: RegisterPatientPayload = {
@@ -18,17 +15,28 @@ const initialForm: RegisterPatientPayload = {
   gender: "male",
   phone: "",
   dob: "",
+
+  // Billing / home address
   address_line1: "",
   address_line2: "",
   city: "",
   county: "",
   postalcode: "",
   country: "UK",
+
+  // ✅ Shipping address (add these fields in RegisterPatientPayload)
+  shipping_address_line1: "",
+  shipping_address_line2: "",
+  shipping_city: "",
+  shipping_county: "",
+  shipping_postalcode: "",
+  shipping_country: "UK",
 };
 
 export default function RegisterPage() {
   const router = useRouter();
   const [form, setForm] = useState<RegisterPatientPayload>(initialForm);
+  const [useDifferentShipping, setUseDifferentShipping] = useState(false);
   const [loading, setLoading] = useState(false);
 
   const handleChange = (
@@ -41,8 +49,22 @@ export default function RegisterPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+
     try {
-      await registerPatientApi(form);
+      const payload: RegisterPatientPayload = useDifferentShipping
+        ? form
+        : {
+            ...form,
+            shipping_address_line1: form.address_line1,
+            shipping_address_line2: form.address_line2,
+            shipping_city: form.city,
+            shipping_county: form.county,
+            shipping_postalcode: form.postalcode,
+            shipping_country: form.country,
+          };
+
+      await registerPatientApi(payload);
+
       toast.success("Account created successfully. Please log in.");
       router.push("/login");
     } catch (err: any) {
@@ -86,6 +108,7 @@ export default function RegisterPage() {
                   placeholder="John"
                 />
               </div>
+
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-medium text-slate-700">
                   Last name
@@ -99,6 +122,7 @@ export default function RegisterPage() {
                   placeholder="Doe"
                 />
               </div>
+
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-medium text-slate-700">
                   Email
@@ -113,6 +137,7 @@ export default function RegisterPage() {
                   placeholder="you@example.com"
                 />
               </div>
+
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-medium text-slate-700">
                   Password
@@ -127,6 +152,7 @@ export default function RegisterPage() {
                   placeholder="At least 8 characters"
                 />
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="block text-[11px] font-medium text-slate-700">
@@ -143,6 +169,7 @@ export default function RegisterPage() {
                     <option value="other">Other / prefer not to say</option>
                   </select>
                 </div>
+
                 <div className="space-y-1.5">
                   <label className="block text-[11px] font-medium text-slate-700">
                     Date of birth
@@ -157,6 +184,7 @@ export default function RegisterPage() {
                   />
                 </div>
               </div>
+
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-medium text-slate-700">
                   Phone
@@ -172,7 +200,7 @@ export default function RegisterPage() {
               </div>
             </div>
 
-            {/* Right column */}
+            {/* Right column (Billing / home address) */}
             <div className="space-y-3">
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-medium text-slate-700">
@@ -187,6 +215,7 @@ export default function RegisterPage() {
                   placeholder="123 Baker Street"
                 />
               </div>
+
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-medium text-slate-700">
                   Address line 2
@@ -199,6 +228,7 @@ export default function RegisterPage() {
                   placeholder="Apartment, building, etc."
                 />
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="block text-[11px] font-medium text-slate-700">
@@ -213,6 +243,7 @@ export default function RegisterPage() {
                     placeholder="London"
                   />
                 </div>
+
                 <div className="space-y-1.5">
                   <label className="block text-[11px] font-medium text-slate-700">
                     County
@@ -227,6 +258,7 @@ export default function RegisterPage() {
                   />
                 </div>
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
                   <label className="block text-[11px] font-medium text-slate-700">
@@ -241,6 +273,7 @@ export default function RegisterPage() {
                     placeholder="NW1 6XE"
                   />
                 </div>
+
                 <div className="space-y-1.5">
                   <label className="block text-[11px] font-medium text-slate-700">
                     Country
@@ -254,6 +287,119 @@ export default function RegisterPage() {
                     placeholder="UK"
                   />
                 </div>
+              </div>
+            </div>
+
+            {/* ✅ Shipping address */}
+            <div className="md:col-span-2">
+              <div className="mt-2 rounded-3xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Shipping address
+                    </p>
+                    <p className="mt-1 text-xs text-slate-600">
+                      By default we will use your address above.
+                    </p>
+                  </div>
+
+                  <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={useDifferentShipping}
+                      onChange={(e) => setUseDifferentShipping(e.target.checked)}
+                      className="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-2 focus:ring-cyan-100"
+                    />
+                    Use a different shipping address
+                  </label>
+                </div>
+
+                {useDifferentShipping ? (
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-medium text-slate-700">
+                        Shipping address line 1
+                      </label>
+                      <input
+                        name="shipping_address_line1"
+                        value={form.shipping_address_line1}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                        placeholder="123 Baker Street"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-medium text-slate-700">
+                        Shipping address line 2
+                      </label>
+                      <input
+                        name="shipping_address_line2"
+                        value={form.shipping_address_line2}
+                        onChange={handleChange}
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                        placeholder="Apartment, building, etc."
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-medium text-slate-700">
+                        Shipping city
+                      </label>
+                      <input
+                        name="shipping_city"
+                        value={form.shipping_city}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                        placeholder="London"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-medium text-slate-700">
+                        Shipping county
+                      </label>
+                      <input
+                        name="shipping_county"
+                        value={form.shipping_county}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                        placeholder="Greater London"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-medium text-slate-700">
+                        Shipping postcode
+                      </label>
+                      <input
+                        name="shipping_postalcode"
+                        value={form.shipping_postalcode}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                        placeholder="NW1 6XE"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="block text-[11px] font-medium text-slate-700">
+                        Shipping country
+                      </label>
+                      <input
+                        name="shipping_country"
+                        value={form.shipping_country}
+                        onChange={handleChange}
+                        required
+                        className="w-full rounded-2xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:border-cyan-400 focus:outline-none focus:ring-2 focus:ring-cyan-100"
+                        placeholder="UK"
+                      />
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
 
