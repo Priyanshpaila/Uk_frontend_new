@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import type React from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useParams, useRouter } from "next/navigation";
 import { ArrowLeft, AlertCircle, CheckCircle2 } from "lucide-react";
 
@@ -25,6 +26,7 @@ type QuestionType =
   | "radio"
   | "date"
   | "file"
+  | "signature" // ✅ added
   // layout / non-answer elements:
   | "static-text"
   | "divider"
@@ -253,8 +255,7 @@ function mapFieldType(
       break;
 
     case "signature":
-      mapped = "text";
-      htmlInputType = "text";
+      mapped = "signature"; // ✅ added
       break;
 
     default:
@@ -839,13 +840,14 @@ export default function RafStep() {
   const hasUploadingFiles = useMemo(
     () =>
       questions.some((q) => {
-        if (q.type !== "file") return false;
+        if (q.type !== "file" && q.type !== "signature") return false; // ✅ include signature
         const val = answers[q.id];
         if (!Array.isArray(val)) return false;
         return val.some((f: any) => f && f.uploading);
       }),
     [questions, answers]
   );
+
   const remainingRequired = requiredUnanswered.length;
   const answeredRequired = Math.max(totalRequired - remainingRequired, 0);
   const percentComplete = totalRequired
@@ -1182,6 +1184,122 @@ function QuestionField({
 
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
+
+  /* ✅ Signature state (added) */
+  const canvasWrapRef = useRef<HTMLDivElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const drawingRef = useRef(false);
+  const lastPtRef = useRef<{ x: number; y: number } | null>(null);
+  const [hasInk, setHasInk] = useState(false);
+
+  useEffect(() => {
+    if (q.type !== "signature") return;
+
+    const wrap = canvasWrapRef.current;
+    const canvas = canvasRef.current;
+    if (!wrap || !canvas) return;
+
+    const height = 160;
+    const width = Math.max(320, wrap.clientWidth || 640);
+    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    canvas.width = Math.floor(width * dpr);
+    canvas.height = Math.floor(height * dpr);
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.lineWidth = 2;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+  }, [q.type]);
+
+  const getCanvasPoint = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return { x: 0, y: 0 };
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  };
+
+  const clearSignatureCanvas = () => {
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    drawingRef.current = false;
+    lastPtRef.current = null;
+    setHasInk(false);
+    setUploadError(null);
+    onChange([]); // same shape as file value
+  };
+
+  const canvasToFile = async (
+    canvas: HTMLCanvasElement,
+    filename: string
+  ): Promise<File | null> => {
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob((b) => resolve(b), "image/png");
+    });
+    if (!blob) return null;
+    return new File([blob], filename, { type: "image/png" });
+  };
+
+  const uploadSignature = async () => {
+    setUploadError(null);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const file = await canvasToFile(canvas, `signature_${q.id}.png`);
+    if (!file) {
+      setUploadError("Could not create signature image. Please try again.");
+      return;
+    }
+
+    // optimistic state: uploading
+    onChange([
+      {
+        name: file.name,
+        size: file.size,
+        type: file.type || "file",
+        uploading: true,
+      } satisfies UploadedFile,
+    ]);
+
+    setUploading(true);
+    try {
+      const res: any = await uploadPageImageApi(file);
+
+      const url = res?.url ?? res?.data?.url ?? res?.location;
+      const path = res?.path ?? res?.data?.path ?? res?.key;
+
+      if (url) {
+        onChange([
+          {
+            name: file.name,
+            size: file.size,
+            type: file.type || "file",
+            path,
+            url,
+          } satisfies UploadedFile,
+        ]);
+      } else {
+        setUploadError(
+          res?.message || "Signature failed to upload. Please try again."
+        );
+        onChange([]);
+      }
+    } catch {
+      setUploadError(
+        "Signature failed to upload due to a network error. Please try again."
+      );
+      onChange([]);
+    } finally {
+      setUploading(false);
+    }
+  };
+
   /* ----- Layout-only elements (no answer) ----- */
 
   if (q.type === "divider") {
@@ -1455,8 +1573,8 @@ function QuestionField({
                     const res: any = await uploadPageImageApi(f);
 
                     // Try to be flexible with response shape
-                    const url = res?.url ?? res?.data?.url ?? res?.location; // add any other key you use
-                    const path = res?.path ?? res?.data?.path ?? res?.key; // add any other key you use
+                    const url = res?.url ?? res?.data?.url ?? res?.location;
+                    const path = res?.path ?? res?.data?.path ?? res?.key;
 
                     if (url) {
                       uploaded.push({
@@ -1519,6 +1637,122 @@ function QuestionField({
           {!q.helpText && (
             <p className="text-[11px] text-slate-500">
               Max 10MB. PDF or image files.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* ✅ Signature: draw + upload using SAME uploadPageImageApi flow */}
+      {q.type === "signature" && (
+        <div className="space-y-2">
+          <div
+            ref={canvasWrapRef}
+            className="rounded-xl border border-slate-200 bg-white p-3"
+          >
+            <canvas
+              ref={canvasRef}
+              className="block w-full touch-none rounded-lg border border-dashed border-slate-200 bg-white"
+              onPointerDown={(e) => {
+                setUploadError(null);
+                const canvas = canvasRef.current;
+                const ctx = canvas?.getContext("2d");
+                if (!canvas || !ctx) return;
+
+                drawingRef.current = true;
+                (e.currentTarget as any).setPointerCapture?.(e.pointerId);
+
+                const pt = getCanvasPoint(e);
+                lastPtRef.current = pt;
+
+                ctx.beginPath();
+                ctx.moveTo(pt.x, pt.y);
+              }}
+              onPointerMove={(e) => {
+                const canvas = canvasRef.current;
+                const ctx = canvas?.getContext("2d");
+                if (!canvas || !ctx) return;
+                if (!drawingRef.current) return;
+
+                const pt = getCanvasPoint(e);
+                const last = lastPtRef.current;
+
+                if (!last) {
+                  lastPtRef.current = pt;
+                  ctx.beginPath();
+                  ctx.moveTo(pt.x, pt.y);
+                  return;
+                }
+
+                ctx.lineTo(pt.x, pt.y);
+                ctx.stroke();
+                lastPtRef.current = pt;
+                setHasInk(true);
+              }}
+              onPointerUp={() => {
+                drawingRef.current = false;
+                lastPtRef.current = null;
+              }}
+              onPointerCancel={() => {
+                drawingRef.current = false;
+                lastPtRef.current = null;
+              }}
+            />
+
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={clearSignatureCanvas}
+                className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Clear
+              </button>
+
+              <button
+                type="button"
+                onClick={uploadSignature}
+                disabled={uploading || !hasInk}
+                className={`rounded-full px-3 py-1 text-xs font-semibold text-white ${
+                  uploading || !hasInk
+                    ? "bg-emerald-300 cursor-not-allowed opacity-80"
+                    : "bg-emerald-600 hover:bg-emerald-700"
+                }`}
+              >
+                {uploading ? "Uploading…" : "Save signature"}
+              </button>
+
+              <span className="text-[11px] text-slate-500">
+                Draw above, then click “Save signature”.
+              </span>
+            </div>
+          </div>
+
+          {Array.isArray(value) && value.length > 0 && (
+            <ul className="text-xs text-slate-600">
+              {value.map((f: any, i: number) => (
+                <li key={i}>
+                  {f.name}{" "}
+                  {typeof f.size === "number"
+                    ? `(${Math.round(f.size / 1024)} KB)`
+                    : ""}
+                  {f.url ? " – uploaded" : f.uploading ? " – uploading…" : ""}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {uploading && (
+            <p className="text-[11px] text-slate-500">
+              Uploading signature… please wait.
+            </p>
+          )}
+
+          {uploadError && (
+            <p className="text-[11px] text-rose-500">{uploadError}</p>
+          )}
+
+          {!q.helpText && (
+            <p className="text-[11px] text-slate-500">
+              Your signature will be uploaded as an image.
             </p>
           )}
         </div>
