@@ -226,6 +226,7 @@ function mapFieldType(
     case "multiselect":
     case "multi_select":
     case "checkboxes":
+    case "checkbox":
     case "checkbox_group":
     case "checkbox-group":
       mapped = "multiselect";
