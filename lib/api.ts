@@ -1061,6 +1061,52 @@ export async function fetchRafFormForService(
   };
 }
 
+export async function fetchClinicFormByIdApi(formId: string) {
+  const base = getBackendBase(); // use your existing helper
+  const token =
+    typeof window !== "undefined"
+      ? localStorage.getItem("session_token") ||
+        localStorage.getItem("pe_session_token") ||
+        localStorage.getItem("token") ||
+        ""
+      : "";
+
+  // try a few common routes (keep the one that matches your backend)
+  const candidates = [
+    `${base}/clinicForms/${formId}`,
+    `${base}/clinic-forms/${formId}`,
+    `${base}/clinic_forms/${formId}`,
+  ];
+
+  let lastErr: any = null;
+
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        cache: "no-store",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+
+      if (!res.ok) {
+        lastErr = new Error(`HTTP ${res.status} for ${url}`);
+        continue;
+      }
+
+      const json = await res.json();
+      return json;
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
+  throw lastErr || new Error("Failed to fetch clinic form by id.");
+}
+
+
 /* ------------------------------------------------------------------ */
 /*                  Consultation session + RAF answers                */
 /* ------------------------------------------------------------------ */

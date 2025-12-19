@@ -2,7 +2,12 @@
 
 import * as React from "react";
 import dynamic from "next/dynamic";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import {
+  useParams,
+  useRouter,
+  useSearchParams,
+  usePathname,
+} from "next/navigation";
 import { ArrowLeft, CheckCircle2 } from "lucide-react";
 
 import Container from "@/components/ui/Container";
@@ -62,6 +67,182 @@ const STEP_STORAGE_KEY = (slug: string) => `booking_step.${slug}`;
 // keep RAF section index key in sync with cleanup
 const RAF_SECTION_STORAGE_KEY = (slug: string) => `raf_section.${slug}`;
 
+// RAF storage keys
+const RAF_FORM_ID_KEY = (slug: string) => `raf_form_id.${slug}`;
+const RAF_LABELS_KEY = (slug: string) => `raf_labels.${slug}`;
+const RAF_ANSWERS_KEY = (slug: string) => `raf_answers.${slug}`;
+const RAF_ANSWERS_LEGACY_KEY = (slug: string) => `raf.answers.${slug}`;
+const RAF_ANSWERS_ASSESS_KEY = (slug: string) => `assessment.answers.${slug}`;
+
+/* -------------------------------------------------------------------------- */
+/*                         RAF FORM ASSIGNMENT HELPERS                        */
+/* -------------------------------------------------------------------------- */
+
+function normaliseType(v: any) {
+  return String(v ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+function pickId(v: any): string | undefined {
+  if (!v) return undefined;
+  const id =
+    v?.form_id ??
+    v?.formId ??
+    v?.clinic_form_id ??
+    v?.clinicFormId ??
+    v?.clinic_form?._id ??
+    v?.clinicForm?._id ??
+    v?.form?._id ??
+    v?._id;
+
+  if (!id) return undefined;
+  const s = String(id).trim();
+  return s ? s : undefined;
+}
+
+function parseMaybeJson(v: any): any {
+  if (!v) return null;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+    try {
+      return JSON.parse(s);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof v === "object") return v;
+  return null;
+}
+
+function extractAssignedRafFormId(service: any): string | undefined {
+  if (!service) return undefined;
+
+  // direct fields (keep)
+  const direct =
+    service?.raf_form_id ??
+    service?.rafFormId ??
+    service?.raf_form?._id ??
+    service?.rafForm?._id;
+  if (direct) return String(direct).trim();
+
+  // ✅ YOUR DB FIELD: forms_assignment (stringified JSON)
+  const formsAssignmentRaw =
+    service?.forms_assignment ??
+    service?.formsAssignment ??
+    service?.forms_assignment_json ??
+    service?.formsAssignmentJson;
+
+  const parsed = parseMaybeJson(formsAssignmentRaw);
+  const rafFromMap =
+    parsed?.raf ?? parsed?.RAF ?? parsed?.risk_assessment ?? parsed?.assessment;
+  if (rafFromMap) return String(rafFromMap).trim();
+
+  // existing array-based fallbacks (keep your current logic)
+  const assignments =
+    service?.form_assignments ??
+    service?.formAssignments ??
+    service?.form_assignment ??
+    service?.formAssignment ??
+    service?.assigned_forms ??
+    service?.assignedForms ??
+    service?.forms ??
+    service?.clinic_forms ??
+    service?.clinicForms;
+
+  const list = Array.isArray(assignments) ? assignments : [];
+
+  const pickId = (v: any): string | undefined => {
+    if (!v) return undefined;
+    const id =
+      v?.form_id ??
+      v?.formId ??
+      v?.clinic_form_id ??
+      v?.clinicFormId ??
+      v?.clinic_form?._id ??
+      v?.clinicForm?._id ??
+      v?.form?._id ??
+      v?._id;
+    if (!id) return undefined;
+    const s = String(id).trim();
+    return s ? s : undefined;
+  };
+
+  const normaliseType = (v: any) =>
+    String(v ?? "")
+      .trim()
+      .toLowerCase();
+
+  const rafLike = list.find((a: any) => {
+    const t =
+      normaliseType(a?.form_type) ||
+      normaliseType(a?.type) ||
+      normaliseType(a?.kind) ||
+      normaliseType(a?.category);
+
+    const name = normaliseType(a?.name) || normaliseType(a?.title);
+    const active =
+      a?.active === undefined
+        ? true
+        : Boolean(a?.active) && a?.deleted_at == null;
+
+    const isRaf =
+      t === "raf" ||
+      t === "risk_assessment" ||
+      t === "risk-assessment" ||
+      t === "assessment" ||
+      name === "raf" ||
+      name.includes("risk") ||
+      name.includes("assessment");
+
+    return active && isRaf && !!pickId(a);
+  });
+
+  if (rafLike) return pickId(rafLike);
+
+  const firstActive = list.find((a: any) => {
+    const active =
+      a?.active === undefined
+        ? true
+        : Boolean(a?.active) && a?.deleted_at == null;
+    return active && !!pickId(a);
+  });
+
+  return firstActive ? pickId(firstActive) : undefined;
+}
+
+function safeGetLocal(key: string): string | undefined {
+  try {
+    const v = window.localStorage.getItem(key);
+    const s = String(v ?? "").trim();
+    return s ? s : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function clearRafCacheForSlug(slug: string) {
+  if (typeof window === "undefined" || !slug) return;
+  try {
+    window.localStorage.removeItem(RAF_ANSWERS_KEY(slug));
+    window.localStorage.removeItem(RAF_ANSWERS_LEGACY_KEY(slug));
+    window.localStorage.removeItem(RAF_ANSWERS_ASSESS_KEY(slug));
+    window.localStorage.removeItem(RAF_LABELS_KEY(slug));
+    window.localStorage.removeItem(RAF_SECTION_STORAGE_KEY(slug));
+    // do NOT remove RAF_FORM_ID_KEY here; caller will set the new value
+  } catch {}
+
+  // Clear last_raf only if it belongs to this slug
+  try {
+    const last = window.localStorage.getItem("last_raf");
+    if (last) {
+      const parsed = JSON.parse(last);
+      if (parsed?.slug === slug) window.localStorage.removeItem("last_raf");
+    }
+  } catch {}
+}
+
 /**
  * Clear booking-specific storage for a given service slug.
  * (We still clear order-related keys here, but this page no longer creates orders.)
@@ -88,7 +269,7 @@ function clearBookingStateForSlug(slug: string) {
     "booking_next",
     "booking_slug",
 
-    // order-specific (note: no creation here, just cleanup)
+    // order-specific
     "order_id",
     "order_last_body",
 
@@ -97,7 +278,7 @@ function clearBookingStateForSlug(slug: string) {
     "pe_consultation_session_id",
     "consultationSessionId",
 
-    // raf helper keys (but NOT raf_answers.*)
+    // raf helper keys (but NOT raf_answers.* by default)
     "last_raf",
     STEP_STORAGE_KEY(slug),
     RAF_SECTION_STORAGE_KEY(slug),
@@ -113,11 +294,70 @@ function clearBookingStateForSlug(slug: string) {
     } catch {}
   }
 
-  // clear consultation cookie
   try {
     document.cookie =
       "pe_consultation_session_id=; Max-Age=0; path=/; SameSite=Lax";
   } catch {}
+}
+
+/* -------------------------------------------------------------------------- */
+/*                        SERVICE FLOW PARSING HELPERS                        */
+/* -------------------------------------------------------------------------- */
+
+function normaliseFlowLabelToStepKey(label: any): StepKey | null {
+  if (!label) return null;
+  const s = String(label).trim().toLowerCase();
+
+  if (s === "treatments" || s === "treatment") return "treatments";
+  if (s === "login" || s === "sign in" || s === "signin") return "login";
+  if (s === "raf" || s === "medical questions" || s === "medical") return "raf";
+  if (s === "calendar" || s === "choose time" || s === "schedule")
+    return "calendar";
+  if (s === "payment" || s === "pay") return "payment";
+  if (s === "success" || s === "confirmation" || s === "complete")
+    return "success";
+
+  return null;
+}
+
+function parseServiceFlow(flowJson?: string | null): StepKey[] | null {
+  if (!flowJson) return null;
+
+  try {
+    const obj = JSON.parse(String(flowJson));
+    if (!obj || typeof obj !== "object") return null;
+
+    const orderedKeys = Object.keys(obj)
+      .filter((k) => /^step\d+$/i.test(k))
+      .sort((a, b) => {
+        const na = parseInt(a.replace(/^\D+/g, ""), 10) || 0;
+        const nb = parseInt(b.replace(/^\D+/g, ""), 10) || 0;
+        return na - nb;
+      });
+
+    const out: StepKey[] = [];
+    const seen = new Set<string>();
+
+    for (const k of orderedKeys) {
+      const stepKey = normaliseFlowLabelToStepKey((obj as any)[k]);
+      if (!stepKey) continue;
+      if (seen.has(stepKey)) continue;
+      seen.add(stepKey);
+      out.push(stepKey);
+    }
+
+    if (!out.length) return null;
+
+    if (!out.includes("success")) out.push("success");
+    else {
+      const without = out.filter((x) => x !== "success");
+      out.splice(0, out.length, ...without, "success");
+    }
+
+    return out;
+  } catch {
+    return null;
+  }
 }
 
 /* -------------------------------------------------------------------------- */
@@ -126,7 +366,59 @@ function clearBookingStateForSlug(slug: string) {
 
 export default function BookServicePage() {
   const params = useParams<{ slug: string }>();
-  const slug = params?.slug ?? "";
+  const slugFromRoute = params?.slug ?? "";
+
+  const pathname = usePathname();
+  const isReorderRoute = React.useMemo(() => {
+    const p = (pathname || "").toLowerCase();
+    return p.includes("/reorder");
+  }, [pathname]);
+
+  const modeSegment = isReorderRoute ? "reorder" : "book";
+
+  // slug state
+  const [slug, setSlug] = React.useState<string>(slugFromRoute);
+
+  // ✅ FIX 1: keep route slug and stored slug consistent
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const routeSlug = String(slugFromRoute || "").trim();
+    let storedSlug = "";
+    try {
+      storedSlug =
+        window.localStorage.getItem("service_slug") ||
+        window.sessionStorage.getItem("service_slug") ||
+        "";
+    } catch {}
+
+    const cleanedStored = String(storedSlug || "").trim();
+
+    // If route slug exists and differs, route slug should win (prevents stale local slug)
+    if (routeSlug && cleanedStored && cleanedStored !== routeSlug) {
+      try {
+        window.localStorage.setItem("service_slug", routeSlug);
+        window.sessionStorage.setItem("service_slug", routeSlug);
+      } catch {}
+      setSlug(routeSlug);
+      return;
+    }
+
+    // If stored exists, use it (matches route or route missing)
+    if (cleanedStored) {
+      setSlug(cleanedStored);
+      return;
+    }
+
+    // Otherwise use route slug and store it
+    if (routeSlug) {
+      try {
+        window.localStorage.setItem("service_slug", routeSlug);
+        window.sessionStorage.setItem("service_slug", routeSlug);
+      } catch {}
+      setSlug(routeSlug);
+    }
+  }, [slugFromRoute]);
 
   const { user } = useAuth();
   const isLoggedIn = !!user;
@@ -134,7 +426,6 @@ export default function BookServicePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // Cart info for gating + summary (raw, from context)
   const cart = useCart() as any;
   const cartItems: any[] = Array.isArray(cart?.items)
     ? cart.items
@@ -142,7 +433,6 @@ export default function BookServicePage() {
     ? cart.state.items
     : [];
 
-  // ✅ Client-only view of cart, to avoid hydration mismatch
   const [clientCartReady, setClientCartReady] = React.useState(false);
   const [clientCartCount, setClientCartCount] = React.useState(0);
 
@@ -153,18 +443,10 @@ export default function BookServicePage() {
 
   const hasCartItems = clientCartReady && clientCartCount > 0;
 
-  // Service details
   const [service, setService] = React.useState<ServiceDetail | null>(null);
   const [serviceLoading, setServiceLoading] = React.useState(true);
 
-  // Flow & step state
-  const flow = React.useMemo<StepKey[]>(
-    () => (isLoggedIn ? BASE_FLOW.filter((s) => s !== "login") : BASE_FLOW),
-    [isLoggedIn]
-  );
-  const [currentStep, setCurrentStep] = React.useState<StepKey>("treatments");
-
-  /* ---------- Load service detail (by slug) & store service_id locally ----- */
+  /* ---------- Load service detail (by slug) & store ids locally ----- */
 
   React.useEffect(() => {
     let cancelled = false;
@@ -173,23 +455,51 @@ export default function BookServicePage() {
       try {
         if (!slug) return;
         setServiceLoading(true);
-        const s = await fetchServiceBySlug(slug);
+
+        const raw: any = await fetchServiceBySlug(slug);
+        const s: any =
+          (raw && typeof raw === "object" && "data" in raw ? raw.data : raw) ??
+          raw;
 
         if (cancelled) return;
 
         setService(s);
 
-        // ✅ store service_id & slug in local/session storage (used by other steps/pages)
+        // ✅ store service_id & slug
         try {
-          if (typeof window !== "undefined" && (s as any)?._id) {
-            const sid = String((s as any)._id);
+          if (typeof window !== "undefined" && s?._id) {
+            const sid = String(s._id);
             window.localStorage.setItem("service_id", sid);
             window.sessionStorage.setItem("service_id", sid);
             window.localStorage.setItem("service_slug", slug);
             window.sessionStorage.setItem("service_slug", slug);
           }
+        } catch {}
+
+        // ✅ FIX 2: sync RAF form id from service assignments into localStorage
+        try {
+          const assignedRafFormId = extractAssignedRafFormId(s);
+          if (assignedRafFormId) {
+            const existing = safeGetLocal(RAF_FORM_ID_KEY(slug));
+
+            // if changed, clear stale RAF caches so old schema/answers don't stick
+            if (existing && existing !== assignedRafFormId) {
+              clearRafCacheForSlug(slug);
+              // optional: small notice (remove if you don't want)
+              // toast.success("Medical questions have been updated. Please review your answers.");
+            }
+
+            window.localStorage.setItem(
+              RAF_FORM_ID_KEY(slug),
+              assignedRafFormId
+            );
+            window.sessionStorage.setItem(
+              RAF_FORM_ID_KEY(slug),
+              assignedRafFormId
+            );
+          }
         } catch {
-          // ignore storage errors
+          // ignore RAF sync errors
         }
       } catch (e) {
         console.error("Failed to load service detail", e);
@@ -204,29 +514,49 @@ export default function BookServicePage() {
     };
   }, [slug]);
 
+  /* ---------- Flow derived from service booking_flow / reorder_flow ---------- */
+
+  const serviceDefinedFlow = React.useMemo<StepKey[]>(() => {
+    const fallback = BASE_FLOW;
+
+    const rawFlowJson = isReorderRoute
+      ? (service as any)?.reorder_flow ?? (service as any)?.reorderFlow ?? null
+      : (service as any)?.booking_flow ?? (service as any)?.bookingFlow ?? null;
+
+    const parsed = parseServiceFlow(rawFlowJson);
+
+    return parsed && parsed.length ? parsed : fallback;
+  }, [service, isReorderRoute]);
+
+  const flow = React.useMemo<StepKey[]>(
+    () =>
+      isLoggedIn
+        ? serviceDefinedFlow.filter((s) => s !== "login")
+        : serviceDefinedFlow,
+    [isLoggedIn, serviceDefinedFlow]
+  );
+
+  const [currentStep, setCurrentStep] = React.useState<StepKey>("treatments");
+
   /* ---------- Restore current step from URL (?step=) or localStorage ------- */
 
   React.useEffect(() => {
     if (!slug) return;
 
-    // 1) Try from URL
     const rawFromQuery = (searchParams.get("step") || "") as StepKey;
     let step: StepKey | null = null;
 
     if (rawFromQuery && BASE_FLOW.includes(rawFromQuery)) {
       step = rawFromQuery;
     } else if (typeof window !== "undefined") {
-      // 2) Fallback to localStorage
       const persisted = window.localStorage.getItem(STEP_STORAGE_KEY(slug));
       if (persisted && BASE_FLOW.includes(persisted as StepKey)) {
         step = persisted as StepKey;
       }
     }
 
-    // 3) Default
     if (!step) step = "treatments";
 
-    // 4) Enforce auth rules
     if (isLoggedIn && step === "login") {
       const idxInBase = BASE_FLOW.indexOf("login");
       step = (BASE_FLOW[idxInBase + 1] ?? "treatments") as StepKey;
@@ -236,23 +566,19 @@ export default function BookServicePage() {
       step = "login";
     }
 
-    // 5) Ensure step is in the active flow (login may be removed)
     if (!flow.includes(step)) {
-      step = "treatments";
+      step = flow[0] ?? "treatments";
     }
 
     setCurrentStep((prev) => (prev === step ? prev : step));
   }, [slug, isLoggedIn, flow, searchParams]);
 
-  // 💾 Persist current step whenever it changes
   React.useEffect(() => {
     if (typeof window === "undefined") return;
     if (!slug) return;
     try {
       window.localStorage.setItem(STEP_STORAGE_KEY(slug), currentStep);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, [slug, currentStep]);
 
   const currentIndex = React.useMemo(() => {
@@ -265,8 +591,6 @@ export default function BookServicePage() {
   const prevStep: StepKey | null =
     currentIndex > 0 ? flow[currentIndex - 1] : null;
 
-  /* ---------- Central step navigation helper (keeps URL + state in sync) --- */
-
   const goToStep = React.useCallback(
     (step: StepKey) => {
       if (!flow.includes(step)) return;
@@ -278,35 +602,31 @@ export default function BookServicePage() {
         sp.set("step", step);
         const qs = sp.toString();
         const path = qs
-          ? `/private-services/${encodeURIComponent(slug)}/book?${qs}`
-          : `/private-services/${encodeURIComponent(slug)}/book`;
+          ? `/private-services/${encodeURIComponent(slug)}/${modeSegment}?${qs}`
+          : `/private-services/${encodeURIComponent(slug)}/${modeSegment}`;
 
         router.replace(path, { scroll: false });
-      } catch {
-        // ignore navigation errors
-      }
+      } catch {}
     },
-    [flow, router, searchParams, slug]
+    [flow, router, searchParams, slug, modeSegment]
   );
 
-  // If user becomes logged in while on "login" step, jump forward
   React.useEffect(() => {
     if (isLoggedIn && currentStep === "login") {
       const idxInBase = BASE_FLOW.indexOf("login");
       const afterLogin = (BASE_FLOW[idxInBase + 1] ?? "treatments") as StepKey;
-      goToStep(afterLogin);
+      goToStep(
+        flow.includes(afterLogin) ? afterLogin : flow[0] ?? "treatments"
+      );
     }
-  }, [isLoggedIn, currentStep, goToStep]);
+  }, [isLoggedIn, currentStep, goToStep, flow]);
 
-  // 🔄 When user reaches the final "success" step, clear old booking/order state
   React.useEffect(() => {
     if (!slug) return;
     if (currentStep === "success") {
       clearBookingStateForSlug(slug);
     }
   }, [slug, currentStep]);
-
-  /* ---------- Guards (no order creation here) ---------- */
 
   const canProceedFrom = React.useCallback(
     (step: StepKey): { ok: boolean; message?: string } => {
@@ -330,8 +650,6 @@ export default function BookServicePage() {
     [hasCartItems, isLoggedIn]
   );
 
-  /* ---------- Navigation handlers (just step changes) ---------- */
-
   const handleNext = () => {
     if (!nextStep) return;
 
@@ -349,7 +667,7 @@ export default function BookServicePage() {
     goToStep(prevStep);
   };
 
-  const maxClickableIndex = currentIndex; // cannot skip ahead
+  const maxClickableIndex = currentIndex;
   const nextButtonLabel =
     nextStep === "payment"
       ? "Continue to payment"
@@ -362,13 +680,10 @@ export default function BookServicePage() {
     (currentStep === "treatments" && !hasCartItems) ||
     (currentStep === "login" && !isLoggedIn);
 
-  /* ---------- Render ---------- */
-
   return (
     <main className="min-h-screen bg-pharmacy-bg py-6 md:py-10">
       <Container>
         <div className="mx-auto max-w-5xl">
-          {/* Back link + title */}
           <div className="mb-4 flex items-center justify-between gap-3">
             <button
               type="button"
@@ -393,9 +708,7 @@ export default function BookServicePage() {
             )}
           </div>
 
-          {/* Card wrapper */}
           <div className="rounded-3xl border border-slate-200 bg-white/90 p-4 shadow-soft-card md:p-6">
-            {/* Stepper tabs */}
             <div className="mb-5 flex flex-wrap gap-2 rounded-3xl bg-slate-50 p-2 text-[11px] text-slate-600">
               {flow.map((step, idx) => {
                 const isActive = idx === currentIndex;
@@ -431,7 +744,6 @@ export default function BookServicePage() {
               })}
             </div>
 
-            {/* Service heading */}
             <div className="mb-4 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -450,7 +762,6 @@ export default function BookServicePage() {
                 <span>
                   Step {currentIndex + 1} of {flow.length}
                 </span>
-                {/* ✅ Only render badge after client knows cart count */}
                 {clientCartReady && clientCartCount > 0 && (
                   <span className="inline-flex items-center rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700">
                     {clientCartCount} item
@@ -460,7 +771,6 @@ export default function BookServicePage() {
               </div>
             </div>
 
-            {/* Step content */}
             <div className="mt-2 rounded-2xl border border-slate-100 bg-slate-50/60 p-3 md:p-4">
               {serviceLoading ? (
                 <div className="space-y-2 animate-pulse">
@@ -473,19 +783,14 @@ export default function BookServicePage() {
                   {currentStep === "treatments" && (
                     <TreatmentsStep serviceSlug={slug} />
                   )}
-
                   {currentStep === "login" && <LoginStep />}
-
                   {currentStep === "raf" && <RafStep />}
-
                   {currentStep === "calendar" && (
                     <CalendarStep serviceSlug={slug} />
                   )}
-
                   {currentStep === "payment" && (
                     <PaymentStep serviceSlug={slug} />
                   )}
-
                   {currentStep === "success" && (
                     <SuccessStep serviceSlug={slug} />
                   )}
@@ -493,7 +798,6 @@ export default function BookServicePage() {
               )}
             </div>
 
-            {/* Footer controls (hidden on success) */}
             {currentStep !== "success" && (
               <div className="mt-5 flex flex-col justify-between gap-3 border-t border-slate-200 pt-3 text-xs md:flex-row md:items-center">
                 <div className="text-[11px] text-slate-500">

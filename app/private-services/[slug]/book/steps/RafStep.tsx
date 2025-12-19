@@ -7,6 +7,8 @@ import { ArrowLeft, AlertCircle, CheckCircle2 } from "lucide-react";
 
 import {
   fetchRafFormForService,
+  fetchServiceBySlug,
+  fetchClinicFormByIdApi, // ✅ reads assigned RAF form id from service form assignments
   createConsultationSessionApi,
   saveRafAnswersApi,
   uploadPageImageApi,
@@ -26,7 +28,7 @@ type QuestionType =
   | "radio"
   | "date"
   | "file"
-  | "signature" // ✅ added
+  | "signature"
   // layout / non-answer elements:
   | "static-text"
   | "divider"
@@ -57,12 +59,12 @@ type Question = {
   options?: { value: string; label: string }[];
   multiple?: boolean;
   accept?: string;
-  htmlInputType?: string; // e.g. "text" | "email" | "number"
+  htmlInputType?: string;
 
   // layout / content fields
   isLayoutOnly?: boolean;
-  contentHtml?: string; // for text blocks
-  imageUrl?: string; // for image blocks
+  contentHtml?: string;
+  imageUrl?: string;
 
   // grouping / logic
   sectionKey?: string;
@@ -109,7 +111,6 @@ function extractShowIf(input: any): VisibilityCond | undefined {
 
   if (!cand || typeof cand !== "object") return undefined;
 
-  // honour enabled flag
   if (
     cand.enabled === false ||
     cand.enabled === "false" ||
@@ -255,7 +256,7 @@ function mapFieldType(
       break;
 
     case "signature":
-      mapped = "signature"; // ✅ added
+      mapped = "signature";
       break;
 
     default:
@@ -263,7 +264,6 @@ function mapFieldType(
       break;
   }
 
-  // Extra hint from builder: data.inputType
   const dataInputType = input?.data?.inputType;
   if (
     mapped === "text" &&
@@ -297,7 +297,6 @@ function toQuestionArray(input: any): Question[] {
     }
   }
 
-  // Case A: wrapper object { schema: [...] }
   if (!Array.isArray(input) && typeof input === "object") {
     const maybe =
       input.schema ??
@@ -308,7 +307,6 @@ function toQuestionArray(input: any): Question[] {
     return toQuestionArray(maybe);
   }
 
-  // Case B: flat array (your current schema)
   if (Array.isArray(input)) {
     const items: Question[] = [];
     let curSectionKey: string | undefined;
@@ -319,7 +317,6 @@ function toQuestionArray(input: any): Question[] {
 
       const t = String(x.type ?? x.data?.type ?? "").toLowerCase();
 
-      // Section element: grouping only, no actual question
       if (t === "section") {
         const title = String(x.label ?? x.data?.label ?? x.title ?? "Section");
         curSectionTitle = title;
@@ -480,6 +477,173 @@ function resolveInitialSessionId(search: any): number | undefined {
 }
 
 /* ------------------------------------------------------------------ */
+/* ✅ Extract assigned RAF form id from Service "form assignments"     */
+/* ------------------------------------------------------------------ */
+
+function normaliseType(v: any) {
+  return String(v ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+function pickId(v: any): string | undefined {
+  if (!v) return undefined;
+  const id =
+    v?.form_id ??
+    v?.formId ??
+    v?.clinic_form_id ??
+    v?.clinicFormId ??
+    v?.clinic_form?._id ??
+    v?.clinicForm?._id ??
+    v?.form?._id ??
+    v?._id;
+
+  if (!id) return undefined;
+  const s = String(id).trim();
+  return s ? s : undefined;
+}
+
+function parseMaybeJson(v: any): any {
+  if (!v) return null;
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (!s) return null;
+    try {
+      return JSON.parse(s);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof v === "object") return v;
+  return null;
+}
+
+function extractAssignedRafFormId(service: any): string | undefined {
+  if (!service) return undefined;
+
+  // direct fields (keep)
+  const direct =
+    service?.raf_form_id ?? service?.rafFormId ?? service?.raf_form?._id;
+  if (direct) return String(direct).trim();
+
+  // ✅ YOUR DB FIELD: forms_assignment (stringified JSON)
+  const formsAssignmentRaw =
+    service?.forms_assignment ?? service?.formsAssignment;
+
+  const parsed = parseMaybeJson(formsAssignmentRaw);
+  const rafFromMap = parsed?.raf ?? parsed?.RAF;
+  if (rafFromMap) return String(rafFromMap).trim();
+
+  // existing array-based fallbacks (keep your current logic)
+  const assignments =
+    service?.form_assignments ??
+    service?.formAssignments ??
+    service?.form_assignment ??
+    service?.formAssignment ??
+    service?.assigned_forms ??
+    service?.assignedForms ??
+    service?.forms ??
+    service?.clinic_forms ??
+    service?.clinicForms;
+
+  const list = Array.isArray(assignments) ? assignments : [];
+
+  const pickId = (v: any): string | undefined => {
+    if (!v) return undefined;
+    const id =
+      v?.raf_form_id ??
+      v?.formId ??
+      v?.clinic_form_id ??
+      v?.clinicFormId ??
+      v?.clinic_form?._id ??
+      v?.clinicForm?._id ??
+      v?.form?._id ??
+      v?._id;
+    if (!id) return undefined;
+    const s = String(id).trim();
+    return s ? s : undefined;
+  };
+
+  const normaliseType = (v: any) =>
+    String(v ?? "")
+      .trim()
+      .toLowerCase();
+
+  const rafLike = list.find((a: any) => {
+    const t =
+      normaliseType(a?.form_type) ||
+      normaliseType(a?.type) ||
+      normaliseType(a?.kind) ||
+      normaliseType(a?.category);
+
+    const name = normaliseType(a?.name) || normaliseType(a?.title);
+    const active =
+      a?.active === undefined
+        ? true
+        : Boolean(a?.active) && a?.deleted_at == null;
+
+    const isRaf =
+      t === "raf" ||
+      t === "risk_assessment" ||
+      t === "risk-assessment" ||
+      t === "assessment" ||
+      name === "raf" ||
+      name.includes("risk") ||
+      name.includes("assessment");
+
+    return active && isRaf && !!pickId(a);
+  });
+
+  if (rafLike) return pickId(rafLike);
+
+  const firstActive = list.find((a: any) => {
+    const active =
+      a?.active === undefined
+        ? true
+        : Boolean(a?.active) && a?.deleted_at == null;
+    return active && !!pickId(a);
+  });
+
+  return firstActive ? pickId(firstActive) : undefined;
+}
+
+/* ------------------------------------------------------------------ */
+/* ✅ Fix: when assigned RAF form changes, clear stale local cache     */
+/* ------------------------------------------------------------------ */
+
+function safeGetLocal(key: string): string | undefined {
+  try {
+    const v = localStorage.getItem(key);
+    const s = String(v ?? "").trim();
+    return s ? s : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function clearRafLocalCacheForSlug(slug: string) {
+  try {
+    localStorage.removeItem(rafStorageKey(slug));
+    localStorage.removeItem(legacyRafStorageKey(slug));
+    localStorage.removeItem(`assessment.answers.${slug}`);
+    localStorage.removeItem(`raf_labels.${slug}`);
+    localStorage.removeItem(rafSectionKey(slug));
+    localStorage.removeItem(rafFormIdKey(slug));
+  } catch {}
+
+  // Clear last_raf only if it's for this slug (prevents wiping other services)
+  try {
+    const lastRaw = localStorage.getItem("last_raf");
+    if (lastRaw) {
+      const parsed = JSON.parse(lastRaw);
+      if (parsed?.slug === slug) {
+        localStorage.removeItem("last_raf");
+      }
+    }
+  } catch {}
+}
+
+/* ------------------------------------------------------------------ */
 /* Main RAF step component                                            */
 /* ------------------------------------------------------------------ */
 
@@ -540,7 +704,7 @@ export default function RafStep() {
           setSessionId(sid);
         }
       } catch {
-        // soft-fail, user can still answer
+        // soft-fail
       }
     }
 
@@ -565,7 +729,6 @@ export default function RafStep() {
         return;
       }
 
-      // Fallback: last_raf object { slug, sessionId, answers, ts }
       const lastRaw = localStorage.getItem("last_raf");
       if (lastRaw) {
         try {
@@ -592,11 +755,80 @@ export default function RafStep() {
       setLoading(true);
       setError(null);
 
+      // read current stored form id (could be stale)
+      const storedFormIdBefore = safeGetLocal(rafFormIdKey(slug));
+      let cleared = false;
+
       try {
-        const result = await fetchRafFormForService(slug, serviceIdParam);
+        // ✅ always resolve assigned form id from service (source of truth)
+        let assignedRafFormId: string | undefined;
+        try {
+          const svcAny: any = await fetchServiceBySlug(slug);
+          const svc =
+            (svcAny && typeof svcAny === "object" && "data" in svcAny
+              ? (svcAny as any).data
+              : svcAny) ?? svcAny;
+
+          assignedRafFormId = extractAssignedRafFormId(svc);
+        } catch {
+          // ignore: fallback to existing logic below
+        }
+
+        // ✅ if assignment changed vs stored, clear stale cached form + answers
+        if (
+          assignedRafFormId &&
+          storedFormIdBefore &&
+          assignedRafFormId !== storedFormIdBefore
+        ) {
+          clearRafLocalCacheForSlug(slug);
+          setAnswers({});
+          setSectionIdx(0);
+          cleared = true;
+        }
+
+        // ✅ ensure local storage reflects the current assignment BEFORE fetching
+        // (important if fetchRafFormForService internally reads raf_form_id.*)
+        try {
+          if (assignedRafFormId) {
+            localStorage.setItem(rafFormIdKey(slug), String(assignedRafFormId));
+          }
+        } catch {}
+
+        // ✅ Use assigned RAF form id when present; otherwise keep existing behavior
+        const rafFormId =
+          assignedRafFormId || safeGetLocal(rafFormIdKey(slug)) || undefined;
+
+        let raw: any;
+
+        if (rafFormId) {
+          // ✅ fetch the exact form by id (prevents backend “old mapping” issues)
+          raw = await fetchClinicFormByIdApi(rafFormId);
+        } else {
+          // fallback (if no form id exists at all)
+          raw = await fetchRafFormForService(slug, serviceIdParam);
+        }
+
+        const result: ApiClinicForm | null =
+          (raw && typeof raw === "object" && "data" in raw ? raw.data : raw) ??
+          null;
+
         if (!result) {
           setQuestions([]);
           return;
+        }
+
+        // ✅ second safety: if backend returns a different form id than stored, clear stale cache
+        const actualFormId = String(result._id ?? "").trim() || undefined;
+        if (
+          !cleared &&
+          storedFormIdBefore &&
+          actualFormId &&
+          actualFormId !== storedFormIdBefore
+        ) {
+          clearRafLocalCacheForSlug(slug);
+          setAnswers({});
+          setSectionIdx(0);
+          cleared = true;
         }
 
         if (result.service_id) {
@@ -611,7 +843,7 @@ export default function RafStep() {
           const labelMap: Record<string, { label: string; key: string }> = {};
 
           for (const q of list) {
-            if (q.isLayoutOnly) continue; // ignore dividers, static text, etc.
+            if (q.isLayoutOnly) continue;
             const fieldKey = q.id;
             labelMap[fieldKey] = {
               label: q.label,
@@ -629,8 +861,8 @@ export default function RafStep() {
             description: result.description ?? null,
           };
 
-          localStorage.setItem(`raf_form.${slug}`, JSON.stringify(formMeta));
-          localStorage.setItem(rafFormIdKey(slug), String(result._id));
+          const effectiveFormId = assignedRafFormId || String(result._id);
+          localStorage.setItem(rafFormIdKey(slug), effectiveFormId);
         } catch {
           // ignore storage errors
         }
@@ -687,7 +919,6 @@ export default function RafStep() {
     return byKey ? answers[byKey] : undefined;
   };
 
-  // loose comparison for showIf
   const looseEqual = (a: any, b: any): boolean => {
     const norm = (v: any) => {
       if (typeof v === "string") {
@@ -716,7 +947,6 @@ export default function RafStep() {
 
     const rawVal = getAnswerByField(c.field);
 
-    // truthy condition
     if (c.truthy) {
       if (Array.isArray(rawVal)) return rawVal.length > 0;
       return !!rawVal;
@@ -840,7 +1070,7 @@ export default function RafStep() {
   const hasUploadingFiles = useMemo(
     () =>
       questions.some((q) => {
-        if (q.type !== "file" && q.type !== "signature") return false; // ✅ include signature
+        if (q.type !== "file" && q.type !== "signature") return false;
         const val = answers[q.id];
         if (!Array.isArray(val)) return false;
         return val.some((f: any) => f && f.uploading);
@@ -904,7 +1134,6 @@ export default function RafStep() {
       return;
     }
 
-    // Block moving to next step if any required is unanswered
     if (requiredUnanswered.length > 0) {
       const firstMissing = requiredUnanswered[0];
       setError("Please answer all required questions before continuing.");
@@ -916,7 +1145,6 @@ export default function RafStep() {
     setSubmitting(true);
     setSaveFlash("Saving…");
 
-    // answers already contain file URLs / paths
     const answersToSend: Answers = { ...answers };
     const sid = sessionId != null ? Number(sessionId) : undefined;
 
@@ -1011,7 +1239,6 @@ export default function RafStep() {
       )}
 
       <main className="mx-auto max-w-5xl px-4 pb-10 pt-6">
-        {/* Top bar: back + title */}
         <div className="mb-4 flex items-center justify-between gap-3">
           <button
             type="button"
@@ -1030,7 +1257,6 @@ export default function RafStep() {
           )}
         </div>
 
-        {/* Main card */}
         <section className="rounded-3xl border border-slate-200 bg-white/95 p-4 shadow-soft-card sm:p-6 md:p-8">
           <header className="mb-6 space-y-2">
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-600">
@@ -1072,7 +1298,6 @@ export default function RafStep() {
 
           {!loading && questionsInSection.length > 0 && (
             <>
-              {/* Section header in card */}
               {sections.order.length > 1 && (
                 <div className="mb-4 flex items-center justify-between text-xs sm:text-sm">
                   <div className="flex items-center gap-2 text-slate-700">
@@ -1097,7 +1322,6 @@ export default function RafStep() {
             </>
           )}
 
-          {/* Footer inside card */}
           <footer className="mt-8 flex flex-col gap-4 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
               <CheckCircle2 className="h-4 w-4 text-emerald-500" />
@@ -1185,7 +1409,6 @@ function QuestionField({
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
 
-  /* ✅ Signature state (added) */
   const canvasWrapRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const drawingRef = useRef(false);
@@ -1201,7 +1424,8 @@ function QuestionField({
 
     const height = 160;
     const width = Math.max(320, wrap.clientWidth || 640);
-    const dpr = typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
+    const dpr =
+      typeof window !== "undefined" ? window.devicePixelRatio || 1 : 1;
 
     canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
@@ -1232,7 +1456,7 @@ function QuestionField({
     lastPtRef.current = null;
     setHasInk(false);
     setUploadError(null);
-    onChange([]); // same shape as file value
+    onChange([]);
   };
 
   const canvasToFile = async (
@@ -1257,7 +1481,6 @@ function QuestionField({
       return;
     }
 
-    // optimistic state: uploading
     onChange([
       {
         name: file.name,
@@ -1299,8 +1522,6 @@ function QuestionField({
       setUploading(false);
     }
   };
-
-  /* ----- Layout-only elements (no answer) ----- */
 
   if (q.type === "divider") {
     return (
@@ -1371,8 +1592,6 @@ function QuestionField({
       </div>
     );
   }
-
-  /* ----- Answerable elements ----- */
 
   return (
     <div
@@ -1544,7 +1763,7 @@ function QuestionField({
                 return;
               }
 
-              const max = 10 * 1024 * 1024; // 10MB
+              const max = 10 * 1024 * 1024;
               const kept = list.filter((f) => f.size <= max);
 
               if (!kept.length) {
@@ -1553,7 +1772,6 @@ function QuestionField({
                 return;
               }
 
-              // Optimistic local state: mark as uploading
               onChange(
                 kept.map<UploadedFile>((f) => ({
                   name: f.name,
@@ -1569,10 +1787,8 @@ function QuestionField({
 
                 for (const f of kept) {
                   try {
-                    // Use your page image upload API instead of the old RAF upload
                     const res: any = await uploadPageImageApi(f);
 
-                    // Try to be flexible with response shape
                     const url = res?.url ?? res?.data?.url ?? res?.location;
                     const path = res?.path ?? res?.data?.path ?? res?.key;
 
@@ -1598,10 +1814,8 @@ function QuestionField({
                 }
 
                 if (uploaded.length) {
-                  // Final value: includes backend URL / path
                   onChange(uploaded);
                 } else {
-                  // All failed – clear value
                   onChange([]);
                 }
               } finally {
@@ -1642,7 +1856,6 @@ function QuestionField({
         </div>
       )}
 
-      {/* ✅ Signature: draw + upload using SAME uploadPageImageApi flow */}
       {q.type === "signature" && (
         <div className="space-y-2">
           <div
