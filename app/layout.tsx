@@ -8,10 +8,8 @@ import { AuthProvider } from "@/components/auth/AuthProvider";
 import { CartProvider } from "@/components/cart/cart-context";
 import { Toaster } from "react-hot-toast";
 
-import {
-  fetchDynamicHomePage,
-  type DynamicHomePageContent,
-} from "@/lib/api";
+import { fetchDynamicHomePage, type DynamicHomePageContent } from "@/lib/api";
+import { Suspense } from "react";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -44,7 +42,13 @@ export default async function RootLayout({
         <AuthProvider>
           <CartProvider>
             {/* pass navbar + footer content down */}
-            <Navbar data={pageContent?.navbar} />
+            <Suspense
+              fallback={
+                <div className="h-16 md:h-20 border-b border-slate-200 bg-white/80" />
+              }
+            >
+              <Navbar data={pageContent?.navbar} />
+            </Suspense>
             <main className="flex-1">{children}</main>
             <Footer data={pageContent?.footer} />
             <Toaster position="top-right" />

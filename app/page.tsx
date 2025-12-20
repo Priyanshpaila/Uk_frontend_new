@@ -8,10 +8,8 @@ import TestimonialsSection from "@/components/home/TestimonialsSection";
 import FAQSection from "@/components/home/FAQSection";
 import ContactStrip from "@/components/home/ContactStrip";
 
-import {
-  fetchDynamicHomePage,
-  type DynamicHomePageContent,
-} from "@/lib/api";
+import { fetchDynamicHomePage, type DynamicHomePageContent } from "@/lib/api";
+import { Suspense } from "react";
 
 // ✅ Server component – can fetch data
 export default async function HomePage() {
@@ -33,7 +31,9 @@ export default async function HomePage() {
       <KeyBenefits data={content?.keyBenefits} />
 
       {/* services are already dynamic from /services, so keep as-is */}
-      <ServicesSection />
+      <Suspense fallback={null}>
+        <ServicesSection />
+      </Suspense>
 
       <SafeSecureSection data={content?.safeSecure} />
       <TestimonialsSection data={content?.testimonials} />
