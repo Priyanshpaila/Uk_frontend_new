@@ -10,6 +10,7 @@ import {
   type ServiceMedicineDto,
   type MedicineVariationDto,
 } from "@/lib/api";
+import { Loader2, Pill, RefreshCw, CheckCircle2, Info } from "lucide-react";
 
 /* ------------------------------------------------------------------ */
 /*                          UI Types                                  */
@@ -39,12 +40,35 @@ type UIMedicine = {
 };
 
 /* ------------------------------------------------------------------ */
+/*                        Helpers                                     */
+/* ------------------------------------------------------------------ */
+
+function looksLikeNoMapping(err: any) {
+  const msg = String(err?.message || err || "").toLowerCase();
+
+  // Your screenshot shows: statusCode 404 + "mapping not found" + "Not Found"
+  // We treat that as "no medicines configured", not an error UI.
+  if (
+    msg.includes("mapping not found") ||
+    msg.includes('"statuscode":404') ||
+    msg.includes("statuscode:404") ||
+    (msg.includes("404") && msg.includes("not found")) ||
+    msg.includes("/service-medicines/") ||
+    msg.includes("/service_medicines/")
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/* ------------------------------------------------------------------ */
 /*                        Medicine Card UI                            */
 /* ------------------------------------------------------------------ */
 
 function CatalogProductCard({ item }: { item: UIMedicine }) {
   const cart = useCart() as any;
-  const { addItem, openCart } = cart;
+  const { addItem } = cart; // ✅ do NOT open cart
 
   const cartItems: any[] = Array.isArray(cart?.items)
     ? cart.items
@@ -61,9 +85,7 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
         (v) =>
           v.stock > 0 &&
           (v.maxQty == null || v.maxQty > 0) &&
-          (!v.status ||
-            v.status === "published" ||
-            v.status === "active")
+          (!v.status || v.status === "published" || v.status === "active")
       ) || item.variations[0];
 
     return firstAvailable?.id || "";
@@ -80,10 +102,12 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
   const minQty = selectedVariation?.minQty ?? 1;
   const stockQty = selectedVariation?.stock ?? 0;
   const maxQty =
-    selectedVariation?.maxQty ??
-    (stockQty > 0 ? stockQty : undefined);
+    selectedVariation?.maxQty ?? (stockQty > 0 ? stockQty : undefined);
 
   const [qty, setQty] = useState<number>(() => minQty);
+
+  // ✅ small “added” feedback without opening cart
+  const [justAdded, setJustAdded] = useState(false);
 
   useEffect(() => {
     // Whenever variation or its min/max changes, keep qty within bounds
@@ -112,8 +136,7 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
       if (!ci) return false;
       const sameSku = ci.sku === item.sku;
 
-      const existingVar =
-        ci.variation || ci.variations || ci.optionLabel || "";
+      const existingVar = ci.variation || ci.variations || ci.optionLabel || "";
       const currentVar = variationLabel || "";
 
       return sameSku && existingVar === currentVar;
@@ -127,9 +150,7 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
     stockQty <= 0 ||
     (maxQty != null && maxQty <= 0) ||
     (selectedVariation.status &&
-      !["published", "active"].includes(
-        selectedVariation.status
-      ));
+      !["published", "active"].includes(selectedVariation.status));
 
   const onAdd = () => {
     if (item.outOfStock) return;
@@ -154,9 +175,7 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
     const targetTotal = Math.min(allowedMax, already + desired);
     const delta = targetTotal - already; // how many more we can add
 
-    if (delta <= 0) {
-      return;
-    }
+    if (delta <= 0) return;
 
     const qtyToAdd = delta;
     const unitMinor = selectedVariation.unitMinor;
@@ -171,27 +190,30 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
 
     const slug = normalise(item.sku || item.id);
 
-    addItem({
-      id: item.id,
-      sku: item.sku,
-      slug,
-      name: item.name,
-      image: item.image,
-      price: priceMajor, // major units for UI
-      qty: qtyToAdd, // only the extra quantity
-      unitMinor,
-      totalMinor,
-      strength: item.strength,
-      maxQty: maxQty ?? null,
-      variation: variationLabel || undefined,
-      variations: variationLabel || undefined,
-      optionLabel: variationLabel || undefined,
-      label: variationLabel || undefined,
-    });
+    addItem(
+      {
+        id: item.id,
+        sku: item.sku,
+        slug,
+        name: item.name,
+        image: item.image,
+        price: priceMajor, // major units for UI
+        qty: qtyToAdd, // only the extra quantity
+        unitMinor,
+        totalMinor,
+        strength: item.strength,
+        maxQty: maxQty ?? null,
+        variation: variationLabel || undefined,
+        variations: variationLabel || undefined,
+        optionLabel: variationLabel || undefined,
+        label: variationLabel || undefined,
+      },
+      { openCart: false } // ✅ THIS is what prevents drawer from opening
+    );
 
-    if (typeof openCart === "function") {
-      openCart();
-    }
+    // ✅ Do NOT open cart. Just show a small confirmation state.
+    setJustAdded(true);
+    window.setTimeout(() => setJustAdded(false), 1400);
   };
 
   const disabled =
@@ -200,12 +222,7 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
     qty < minQty ||
     (maxQty != null && maxQty > 0 && qty > maxQty);
 
-  const priceToShow =
-    selectedVariation?.price ??
-    item.baseFromPrice ??
-    0;
-
-  const hasMultipleVariations = item.variations.length > 1;
+  const priceToShow = selectedVariation?.price ?? item.baseFromPrice ?? 0;
 
   return (
     <article className="flex h-full w-full flex-col rounded-[28px] border border-slate-200/80 bg-white/95 p-5 shadow-[0_18px_45px_rgba(15,23,42,0.08)] transition hover:-translate-y-1 hover:shadow-[0_26px_60px_rgba(15,23,42,0.16)] sm:p-6">
@@ -225,11 +242,6 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
           <h3 className="text-base font-semibold leading-snug text-slate-900 sm:text-lg">
             {item.name}
           </h3>
-          {/* {item.sku && (
-            <span className="mt-0.5 inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-slate-500">
-              {item.sku}
-            </span>
-          )} */}
         </div>
 
         {selectedVariation && (
@@ -251,14 +263,6 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
       {/* Price row */}
       <div className="mb-4 flex items-baseline justify-between">
         <div className="flex flex-col gap-0.5">
-          {/* {hasMultipleVariations && item.baseFromPrice && (
-            <span className="text-[11px] text-slate-400">
-              From{" "}
-              <span className="font-semibold text-emerald-600">
-                £{item.baseFromPrice.toFixed(2)}
-              </span>
-            </span>
-          )} */}
           <div className="flex items-baseline gap-1">
             <span className="text-xl font-semibold text-emerald-600 sm:text-2xl">
               £{priceToShow.toFixed(2)}
@@ -266,7 +270,6 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
             <span className="text-[11px] text-slate-500">per dose</span>
           </div>
         </div>
-
       </div>
 
       {/* Variation selector */}
@@ -286,8 +289,6 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
               </option>
             ))}
           </select>
-
-       
         </div>
       )}
 
@@ -320,14 +321,26 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
           className={`flex-1 rounded-full py-2.5 text-sm font-semibold shadow-sm transition ${
             disabled
               ? "cursor-not-allowed bg-slate-200 text-slate-500"
+              : justAdded
+              ? "bg-emerald-600 text-white"
               : "bg-emerald-500 text-white hover:bg-emerald-600"
           }`}
         >
           {item.outOfStock || variationOutOfStock
             ? "Out of stock"
+            : justAdded
+            ? "Added"
             : "Add to basket"}
         </button>
       </div>
+
+      {/* ✅ subtle inline feedback */}
+      {justAdded && (
+        <div className="mt-3 flex items-center justify-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">
+          <CheckCircle2 className="h-4 w-4" />
+          Added to basket 
+        </div>
+      )}
     </article>
   );
 }
@@ -335,6 +348,54 @@ function CatalogProductCard({ item }: { item: UIMedicine }) {
 /* ------------------------------------------------------------------ */
 /*                         Treatments Step                            */
 /* ------------------------------------------------------------------ */
+
+function EmptyMedicinesState({ onRetry }: { onRetry?: () => void }) {
+  return (
+    <div className="mx-auto max-w-3xl">
+      <div className="rounded-[28px] border border-slate-200 bg-white/95 p-6 shadow-[0_18px_45px_rgba(15,23,42,0.08)] sm:p-8">
+        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/10 text-emerald-700">
+          <Pill className="h-7 w-7" />
+        </div>
+
+        <div className="mt-4 text-center space-y-2">
+          <h3 className="text-lg font-semibold text-slate-900 sm:text-xl">
+            No medicines linked for this service
+          </h3>
+          <p className="text-sm text-slate-600">
+            This service can still be booked. If medicines are required later,
+            the pharmacy team can link them to the service from the admin panel.
+          </p>
+
+          <div className="mt-4 inline-flex items-start gap-2 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-left text-xs text-slate-600">
+            <Info className="mt-0.5 h-4 w-4 text-slate-500" />
+            <div className="space-y-1">
+              <p className="font-medium text-slate-700">What you can do now:</p>
+              <ul className="list-disc pl-4 space-y-1">
+                <li>Continue to the next step of the booking journey.</li>
+                <li>
+                  Come back later once medicines are mapped to this service.
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          {onRetry && (
+            <div className="mt-5 flex justify-center">
+              <button
+                type="button"
+                onClick={onRetry}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Retry loading medicines
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export default function TreatmentsStep({
   serviceSlug: serviceSlugProp,
@@ -349,17 +410,16 @@ export default function TreatmentsStep({
 
   // serviceId from prop or query (?serviceId / ?service_id)
   const serviceIdFromQuery =
-    searchParams?.get("serviceId") ||
-    searchParams?.get("service_id") ||
-    "";
+    searchParams?.get("serviceId") || searchParams?.get("service_id") || "";
   const initialServiceId = (serviceIdProp ?? serviceIdFromQuery) || null;
 
   const [resolvedServiceId, setResolvedServiceId] = useState<string | null>(
     initialServiceId
   );
   const [resolvingService, setResolvingService] = useState(false);
-  const [serviceResolveError, setServiceResolveError] =
-    useState<string | null>(null);
+  const [serviceResolveError, setServiceResolveError] = useState<string | null>(
+    null
+  );
 
   // Track auth state (client-only)
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -391,9 +451,12 @@ export default function TreatmentsStep({
 
   const [data, setData] = useState<ServiceMedicineDto[] | null>(null);
   const [loadingMedicines, setLoadingMedicines] = useState(true);
-  const [medicineError, setMedicineError] = useState<string | null>(
-    null
-  );
+
+  // ✅ Instead of showing raw server error, keep a friendly message
+  const [medicineError, setMedicineError] = useState<string | null>(null);
+
+  // ✅ Track “no medicines linked” fallback separately
+  const [noMedicinesLinked, setNoMedicinesLinked] = useState(false);
 
   // -------- 1) Resolve serviceId via API (slug → _id) --------
   useEffect(() => {
@@ -420,16 +483,13 @@ export default function TreatmentsStep({
           setServiceResolveError(null);
         } else {
           setResolvedServiceId(null);
-          setServiceResolveError(
-            `No service found for slug "${serviceSlug}".`
-          );
+          setServiceResolveError(`No service found for slug "${serviceSlug}".`);
         }
       } catch (err: any) {
         if (cancelled) return;
         setResolvedServiceId(null);
         setServiceResolveError(
-          err?.message ||
-            "Failed to resolve service ID from slug."
+          err?.message || "Failed to resolve service ID from slug."
         );
       } finally {
         if (!cancelled) setResolvingService(false);
@@ -442,46 +502,68 @@ export default function TreatmentsStep({
     };
   }, [initialServiceId, serviceSlug]);
 
+  const fetchMedicines = async (svcId: string) => {
+    setLoadingMedicines(true);
+    setMedicineError(null);
+    setNoMedicinesLinked(false);
+
+    try {
+      const json: any = await fetchServiceMedicinesByServiceId(svcId);
+
+      // Normalize possible shapes: array | {data: []}
+      const list: ServiceMedicineDto[] = Array.isArray(json)
+        ? json
+        : Array.isArray(json?.data)
+        ? json.data
+        : [];
+
+      setData(list);
+      setNoMedicinesLinked(list.length === 0);
+    } catch (err: any) {
+      // ✅ If backend says mapping not found / 404 => treat as empty (nice fallback)
+      if (looksLikeNoMapping(err)) {
+        setData([]);
+        setNoMedicinesLinked(true);
+        setMedicineError(null);
+        console.warn(
+          "No medicines mapping for this service (treated as empty).",
+          err
+        );
+        return;
+      }
+
+      // ✅ Otherwise show a clean message
+      console.warn("TreatmentsStep medicines fetch failed:", err);
+      setData(null);
+      setNoMedicinesLinked(false);
+      setMedicineError("We couldn’t load medicines right now. Please retry.");
+    } finally {
+      setLoadingMedicines(false);
+    }
+  };
+
   // -------- 2) Fetch medicines for resolved service --------
   useEffect(() => {
     if (!resolvedServiceId) {
       setData(null);
       setLoadingMedicines(false);
+      setNoMedicinesLinked(false);
       return;
     }
 
     let mounted = true;
-    setLoadingMedicines(true);
-    setMedicineError(null);
-
-    fetchServiceMedicinesByServiceId(resolvedServiceId)
-      .then((json) => {
-        if (!mounted) return;
-        setData(json);
-      })
-      .catch((err: any) => {
-        if (!mounted) return;
-        setMedicineError(
-          `Failed to load medicines: ${String(
-            err?.message || err
-          )}`
-        );
-        if (typeof window !== "undefined") {
-          console.warn(
-            "TreatmentsStep medicines fetch failed:",
-            err
-          );
-        }
-      })
-      .finally(() => mounted && setLoadingMedicines(false));
+    (async () => {
+      await fetchMedicines(resolvedServiceId);
+    })();
 
     return () => {
       mounted = false;
+      void mounted;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolvedServiceId]);
 
   // -------- 3) Map API → UI model (variation-aware) --------
-
   const uiMedicines: UIMedicine[] = useMemo(() => {
     if (!data?.length) return [];
 
@@ -489,9 +571,7 @@ export default function TreatmentsStep({
 
     for (const m of data) {
       const imageUrl = buildMediaUrl(m.image);
-      const rawVariations: MedicineVariationDto[] = Array.isArray(
-        m.variations
-      )
+      const rawVariations: MedicineVariationDto[] = Array.isArray(m.variations)
         ? m.variations
         : [];
 
@@ -501,13 +581,8 @@ export default function TreatmentsStep({
         uiVariations = rawVariations
           .map((v, idx) => {
             const isActiveVariation =
-              !v.status ||
-              v.status === "published" ||
-              v.status === "active";
-
-            const stock = isActiveVariation
-              ? Number(v.stock || 0)
-              : 0;
+              !v.status || v.status === "published" || v.status === "active";
+            const stock = isActiveVariation ? Number(v.stock || 0) : 0;
 
             const price =
               typeof v.price === "number"
@@ -519,19 +594,13 @@ export default function TreatmentsStep({
             const unitMinor = Math.round(price * 100);
 
             const varMin =
-              typeof v.min_qty === "number" && v.min_qty > 0
-                ? v.min_qty
-                : null;
+              typeof v.min_qty === "number" && v.min_qty > 0 ? v.min_qty : null;
             const globalMin =
-              typeof m.min_qty === "number" && m.min_qty > 0
-                ? m.min_qty
-                : null;
+              typeof m.min_qty === "number" && m.min_qty > 0 ? m.min_qty : null;
             const minQty = (varMin ?? globalMin ?? 1) || 1;
 
             const varMax =
-              typeof v.max_qty === "number" && v.max_qty > 0
-                ? v.max_qty
-                : null;
+              typeof v.max_qty === "number" && v.max_qty > 0 ? v.max_qty : null;
             const globalMax =
               typeof m.max_bookable_quantity === "number" &&
               m.max_bookable_quantity > 0
@@ -539,11 +608,9 @@ export default function TreatmentsStep({
                 : null;
 
             let baseMax: number | null = null;
-            if (varMax != null && globalMax != null) {
+            if (varMax != null && globalMax != null)
               baseMax = Math.min(varMax, globalMax);
-            } else {
-              baseMax = varMax ?? globalMax;
-            }
+            else baseMax = varMax ?? globalMax;
 
             const maxQty =
               baseMax != null && baseMax > 0
@@ -566,8 +633,7 @@ export default function TreatmentsStep({
 
       // If no variations configured, fallback to a single default line
       if (uiVariations.length === 0) {
-        const price =
-          typeof m.price_from === "number" ? m.price_from : 0;
+        const price = typeof m.price_from === "number" ? m.price_from : 0;
         const unitMinor = Math.round(price * 100);
         const stock =
           typeof (m as any).qty === "number"
@@ -577,9 +643,7 @@ export default function TreatmentsStep({
             : 0;
 
         const minQty =
-          typeof m.min_qty === "number" && m.min_qty > 0
-            ? m.min_qty
-            : 1;
+          typeof m.min_qty === "number" && m.min_qty > 0 ? m.min_qty : 1;
         const maxQty =
           typeof m.max_qty === "number" && m.max_qty > 0
             ? Math.min(m.max_qty, stock || m.max_qty)
@@ -600,9 +664,7 @@ export default function TreatmentsStep({
       }
 
       const outOfStock = !uiVariations.some(
-        (v) =>
-          v.stock > 0 &&
-          (v.maxQty == null || v.maxQty > 0)
+        (v) => v.stock > 0 && (v.maxQty == null || v.maxQty > 0)
       );
 
       const baseFromPrice =
@@ -639,52 +701,76 @@ export default function TreatmentsStep({
           Select your medicines
         </h2>
         <p className="text-sm text-slate-500">
-          Choose the medicines you need for this service and add
-          them to your basket.
+          Choose the medicines you need for this service and add them to your
+          basket.
         </p>
       </header>
 
       {showLoading && (
-        <div className="text-center text-sm text-slate-600">
+        <div className="flex items-center justify-center gap-2 text-sm text-slate-600">
+          <Loader2 className="h-4 w-4 animate-spin" />
           Loading medicines…
         </div>
       )}
 
       {!showLoading && serviceResolveError && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-center text-sm text-amber-800">
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-center text-sm text-amber-800">
           {serviceResolveError}
         </div>
       )}
 
-      {!showLoading &&
-        !serviceResolveError &&
-        !resolvedServiceId && (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-center text-sm text-amber-800">
-            No service ID resolved. Make sure a valid service exists
-            for this page.
-          </div>
-        )}
-
-      {medicineError && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-center text-sm text-red-700">
-          {medicineError}
+      {!showLoading && !serviceResolveError && !resolvedServiceId && (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-center text-sm text-amber-800">
+          No service ID resolved. Make sure a valid service exists for this
+          page.
         </div>
       )}
 
+      {/* ✅ Friendly error (no raw server JSON) */}
+      {!showLoading && medicineError && (
+        <div className="mx-auto max-w-3xl rounded-2xl border border-red-200 bg-red-50 p-5 text-center">
+          <p className="text-sm font-semibold text-red-700">
+            Something went wrong
+          </p>
+          <p className="mt-1 text-sm text-red-700/90">{medicineError}</p>
+          {resolvedServiceId && (
+            <div className="mt-4 flex justify-center">
+              <button
+                type="button"
+                onClick={() => fetchMedicines(resolvedServiceId)}
+                className="inline-flex items-center gap-2 rounded-full border border-red-200 bg-white px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Retry
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ✅ Beautiful “no medicines configured” fallback */}
       {!showLoading &&
         !medicineError &&
         resolvedServiceId &&
-        uiMedicines.length === 0 && (
-          <div className="text-center text-sm text-slate-500">
-            No medicines are configured for this service yet.
-          </div>
+        noMedicinesLinked && (
+          <EmptyMedicinesState
+            onRetry={() => {
+              if (resolvedServiceId) fetchMedicines(resolvedServiceId);
+            }}
+          />
         )}
 
-      <div className="grid grid-cols-1 justify-items-center gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
-        {uiMedicines.map((m) => (
-          <CatalogProductCard key={m.id} item={m} />
-        ))}
-      </div>
+      {/* Medicines grid */}
+      {!showLoading &&
+        !medicineError &&
+        resolvedServiceId &&
+        uiMedicines.length > 0 && (
+          <div className="grid grid-cols-1 justify-items-center gap-6 sm:grid-cols-2 lg:grid-cols-3 lg:gap-8">
+            {uiMedicines.map((m) => (
+              <CatalogProductCard key={m.id} item={m} />
+            ))}
+          </div>
+        )}
     </section>
   );
 }

@@ -446,6 +446,33 @@ export default function BookServicePage() {
   const [service, setService] = React.useState<ServiceDetail | null>(null);
   const [serviceLoading, setServiceLoading] = React.useState(true);
 
+  const clearCartSafely = async () => {
+    try {
+      // Most common APIs
+      if (typeof cart?.clearCart === "function") return await cart.clearCart();
+      if (typeof cart?.clear === "function") return await cart.clear();
+      if (typeof cart?.resetCart === "function") return await cart.resetCart();
+      if (typeof cart?.reset === "function") return await cart.reset();
+      if (typeof cart?.setItems === "function") return cart.setItems([]);
+
+      // Reducer-style carts
+      if (typeof cart?.dispatch === "function") {
+        // try a few common action names (harmless if ignored)
+        cart.dispatch({ type: "CLEAR_CART" });
+        cart.dispatch({ type: "CLEAR" });
+        cart.dispatch({ type: "RESET" });
+        return;
+      }
+    } catch {}
+
+    // Optional fallback if your cart persists in localStorage (only if you use these keys)
+    try {
+      localStorage.removeItem("cart");
+      localStorage.removeItem("cart_items");
+      localStorage.removeItem("pharmacy_cart");
+    } catch {}
+  };
+
   /* ---------- Load service detail (by slug) & store ids locally ----- */
 
   React.useEffect(() => {
@@ -687,9 +714,10 @@ export default function BookServicePage() {
           <div className="mb-4 flex items-center justify-between gap-3">
             <button
               type="button"
-              onClick={() =>
-                (window.location.href = `/private-services/${slug}`)
-              }
+              onClick={async () => {
+                await clearCartSafely();
+                window.location.href = `/private-services/${slug}`;
+              }}
               className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-cyan-700"
             >
               <ArrowLeft className="h-4 w-4" />

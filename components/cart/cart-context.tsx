@@ -26,11 +26,17 @@ type CartState = {
   items: CartItem[];
 };
 
+export type AddItemOptions = {
+  /** default true (keeps old behaviour) */
+  openCart?: boolean;
+};
+
 type CartContextValue = {
   state: CartState;
   items: CartItem[];
 
-  addItem: (item: CartItem) => void;
+  addItem: (item: CartItem, options?: { openCart?: boolean }) => void;
+
   updateItemQty: (key: string, qty: number) => void;
   removeItem: (key: string) => void;
   clearCart: () => void;
@@ -88,14 +94,11 @@ export function CartProvider({ children }: { children: ReactNode }) {
     }
   }, [state]);
 
-  const addItem = (item: CartItem) => {
+  const addItem = (item: CartItem, options?: { openCart?: boolean }) => {
     setState((prev) => {
       const items = [...prev.items];
-
       const key = cartItemKey(item);
-      const existingIndex = items.findIndex(
-        (it) => cartItemKey(it) === key
-      );
+      const existingIndex = items.findIndex((it) => cartItemKey(it) === key);
 
       if (existingIndex >= 0) {
         const existing = items[existingIndex];
@@ -108,17 +111,16 @@ export function CartProvider({ children }: { children: ReactNode }) {
       return { items };
     });
 
-    // open cart on first add for better UX
-    setIsOpen(true);
+    // ✅ only open if caller allows it (default true)
+    const shouldOpen = options?.openCart ?? true;
+    if (shouldOpen) setIsOpen(true);
   };
 
   const updateItemQty = (key: string, qty: number) => {
     setState((prev) => {
       const items = prev.items
         .map((it) =>
-          cartItemKey(it) === key
-            ? { ...it, qty: Math.max(1, qty) }
-            : it
+          cartItemKey(it) === key ? { ...it, qty: Math.max(1, qty) } : it
         )
         .filter((it) => it.qty > 0);
       return { items };
@@ -131,7 +133,11 @@ export function CartProvider({ children }: { children: ReactNode }) {
     }));
   };
 
-  const clearCart = () => setState({ items: [] });
+  // (optional but recommended) clear should also close drawer
+  const clearCart = () => {
+    setState({ items: [] });
+    setIsOpen(false);
+  };
 
   const value: CartContextValue = useMemo(
     () => ({
@@ -154,8 +160,6 @@ export function CartProvider({ children }: { children: ReactNode }) {
 
 export function useCart() {
   const ctx = useContext(CartContext);
-  if (!ctx) {
-    throw new Error("useCart must be used within a CartProvider");
-  }
+  if (!ctx) throw new Error("useCart must be used within a CartProvider");
   return ctx;
 }
