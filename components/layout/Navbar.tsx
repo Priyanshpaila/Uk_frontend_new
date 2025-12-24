@@ -1,4 +1,3 @@
-// components/layout/Navbar.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
@@ -22,23 +21,29 @@ const DEFAULT_NAV_LINKS = [
   { label: "Help & Support", href: "#faq" },
 ];
 
-// helper to normalise backend/static image URLs
-const resolveImageUrl = (imagePath?: string | null) => {
+// SSR-safe base: do NOT call getBackendBase() during SSR render.
+function resolveImageUrlSSR(imagePath?: string | null) {
   if (!imagePath) return "";
+  if (/^https?:\/\//i.test(imagePath)) return imagePath;
+  const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
+  return normalizedPath; // ✅ stable on server + first client render
+}
 
-  // already an absolute URL – return as is
-  if (/^https?:\/\//i.test(imagePath)) {
-    return imagePath;
-  }
+// client-only upgrade (uses getBackendBase)
+function resolveImageUrlClient(imagePath?: string | null) {
+  if (!imagePath) return "";
+  if (/^https?:\/\//i.test(imagePath)) return imagePath;
 
   const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
 
-  // get backend base (e.g. https://tenant.domain/api) and strip /api
-  const baseWithApi = getBackendBase();
-  const cleanBase = baseWithApi.replace(/\/api\/?$/, "");
-
-  return `${cleanBase}${normalizedPath}`;
-};
+  try {
+    const baseWithApi = getBackendBase();
+    const cleanBase = baseWithApi.replace(/\/api\/?$/, "");
+    return `${cleanBase}${normalizedPath}`;
+  } catch {
+    return normalizedPath;
+  }
+}
 
 type NavbarProps = {
   data?: DynamicNavbarContent | null;
@@ -48,8 +53,13 @@ export default function Navbar({ data }: NavbarProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { user, clearAuth } = useAuth();
+
   const [open, setOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
+
+  // ✅ Hydration guard to avoid SSR/client auth mismatch
+  const [hydrated, setHydrated] = useState(false);
+  useEffect(() => setHydrated(true), []);
 
   // -----------------------------
   // Search state (mapped to URL)
@@ -59,22 +69,16 @@ export default function Navbar({ data }: NavbarProps) {
   const debounceRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // keep input in sync when user navigates back/forward or clicks "clear"
     setSearchValue(qParam);
   }, [qParam]);
 
   const buildSearchHref = useCallback(
     (raw: string) => {
       const v = raw.trim();
-
-      // copy current params so we don't break other query params you may add later
       const params = new URLSearchParams(Array.from(searchParams.entries()));
-
       if (v) params.set("q", v);
       else params.delete("q");
-
       const qs = params.toString();
-      // Search always targets services section on home page
       return qs ? `/?${qs}#services` : `/#services`;
     },
     [searchParams]
@@ -83,7 +87,6 @@ export default function Navbar({ data }: NavbarProps) {
   const scheduleReplace = useCallback(
     (raw: string) => {
       if (typeof window === "undefined") return;
-
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
       debounceRef.current = window.setTimeout(() => {
         router.replace(buildSearchHref(raw));
@@ -94,7 +97,7 @@ export default function Navbar({ data }: NavbarProps) {
 
   const onSearchChange = (next: string) => {
     setSearchValue(next);
-    scheduleReplace(next); // live filtering while typing
+    scheduleReplace(next);
   };
 
   const onSearchSubmit = (e: React.FormEvent) => {
@@ -119,13 +122,6 @@ export default function Navbar({ data }: NavbarProps) {
     router.push("/");
   };
 
-  const userInitial = (
-    user?.firstName?.[0] ||
-    user?.lastName?.[0] ||
-    user?.email?.[0] ||
-    "U"
-  ).toUpperCase();
-
   // Dynamic bits with fallbacks
   const logoUrl = data?.logoUrl ?? "/logo.png";
   const logoAlt = data?.logoAlt ?? "Pharmacy Express logo";
@@ -134,15 +130,32 @@ export default function Navbar({ data }: NavbarProps) {
     "Search for treatments e.g. weight loss, migraines";
 
   const links =
-    data?.navLinks && data.navLinks.length > 0
-      ? data.navLinks
-      : DEFAULT_NAV_LINKS;
+    data?.navLinks && data.navLinks.length > 0 ? data.navLinks : DEFAULT_NAV_LINKS;
 
   const isExternal = (href: string, external?: boolean) =>
     external || href.startsWith("http");
 
-  // Resolve logo through backend-aware helper
-  const logoSrc = resolveImageUrl(logoUrl || "/logo.png");
+  // ✅ SSR-stable logo first, then upgrade after hydration
+  const logoSrcSSR = useMemo(() => resolveImageUrlSSR(logoUrl || "/logo.png"), [logoUrl]);
+  const [logoSrc, setLogoSrc] = useState<string>(logoSrcSSR);
+
+  useEffect(() => {
+    // keep SSR-stable immediately
+    setLogoSrc(logoSrcSSR);
+    // then upgrade to backend-aware absolute URL (client-only)
+    const upgraded = resolveImageUrlClient(logoUrl || "/logo.png");
+    setLogoSrc(upgraded);
+  }, [logoUrl, logoSrcSSR]);
+
+  // ✅ IMPORTANT: prevent SSR/client mismatch for user UI
+  const effectiveUser = hydrated ? user : null;
+
+  const userInitial = (
+    effectiveUser?.firstName?.[0] ||
+    effectiveUser?.lastName?.[0] ||
+    effectiveUser?.email?.[0] ||
+    "U"
+  ).toUpperCase();
 
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/80 backdrop-blur-xl">
@@ -156,6 +169,7 @@ export default function Navbar({ data }: NavbarProps) {
               width={150}
               height={40}
               className="h-8 w-auto md:h-9"
+              priority
             />
           </a>
 
@@ -193,11 +207,11 @@ export default function Navbar({ data }: NavbarProps) {
               })}
             </nav>
 
-            {/* Cart button */}
+            {/* Cart button (safe: CartButton already guards sheet/badge) */}
             <CartButton />
 
-            {/* Desktop account: login OR avatar */}
-            {!user ? (
+            {/* Desktop account: SSR-stable (shows Log in until hydrated) */}
+            {!effectiveUser ? (
               <button
                 type="button"
                 onClick={() => router.push("/login")}
@@ -216,7 +230,7 @@ export default function Navbar({ data }: NavbarProps) {
                     {userInitial}
                   </span>
                   <span className="hidden max-w-[120px] truncate sm:inline-block">
-                    {user?.firstName || user?.email || "My account"}
+                    {effectiveUser?.firstName || effectiveUser?.email || "My account"}
                   </span>
                 </button>
 
@@ -302,8 +316,8 @@ export default function Navbar({ data }: NavbarProps) {
                 );
               })}
 
-              {/* Mobile account actions */}
-              {!user ? (
+              {/* Mobile account actions (SSR-stable via effectiveUser) */}
+              {!effectiveUser ? (
                 <button
                   type="button"
                   className="mt-2 w-full rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"

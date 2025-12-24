@@ -1,7 +1,7 @@
 "use client";
 
 import type React from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useParams, useRouter } from "next/navigation";
 import { ArrowLeft, AlertCircle, CheckCircle2 } from "lucide-react";
 
@@ -409,6 +409,72 @@ const legacyRafStorageKey = (slug: string) => `raf.answers.${slug}`;
 const rafSectionKey = (slug: string) => `raf_section.${slug}`;
 const rafFormIdKey = (slug: string) => `raf_form_id.${slug}`;
 
+function safeJsonParse<T = any>(raw: string | null | undefined): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function writeStorageIfChanged(key: string, value: string) {
+  try {
+    const cur = localStorage.getItem(key);
+    if (cur !== value) localStorage.setItem(key, value);
+  } catch {}
+  try {
+    const cur = sessionStorage.getItem(key);
+    if (cur !== value) sessionStorage.setItem(key, value);
+  } catch {}
+}
+
+function readAnswersFromStorage(slug: string): Answers | null {
+  if (typeof window === "undefined") return null;
+
+  const keys = [
+    rafStorageKey(slug),
+    legacyRafStorageKey(slug),
+    `assessment.answers.${slug}`,
+  ];
+
+  for (const k of keys) {
+    const v =
+      safeJsonParse<Answers>(localStorage.getItem(k)) ||
+      safeJsonParse<Answers>(sessionStorage.getItem(k));
+    if (v && typeof v === "object") return v;
+  }
+
+  // last_raf fallback
+  const last = safeJsonParse<any>(localStorage.getItem("last_raf"));
+  if (last?.slug === slug && last?.answers && typeof last.answers === "object") {
+    return last.answers as Answers;
+  }
+
+  return null;
+}
+
+function persistAnswersToStorage(slug: string, answers: Answers, sessionId?: number) {
+  if (!slug) return;
+  const json = JSON.stringify(answers || {});
+  writeStorageIfChanged(rafStorageKey(slug), json);
+  writeStorageIfChanged(legacyRafStorageKey(slug), json);
+  writeStorageIfChanged(`assessment.answers.${slug}`, json);
+
+  // notify same-tab listeners (not cross-tab)
+  try {
+    window.dispatchEvent(
+      new CustomEvent("raf:updated", {
+        detail: {
+          slug,
+          sessionId,
+          count: Object.keys(answers || {}).length,
+        },
+      })
+    );
+  } catch {}
+}
+
 function getCookie(name: string): string | undefined {
   try {
     const value = `; ${document.cookie}`;
@@ -548,27 +614,6 @@ function extractAssignedRafFormId(service: any): string | undefined {
 
   const list = Array.isArray(assignments) ? assignments : [];
 
-  const pickId = (v: any): string | undefined => {
-    if (!v) return undefined;
-    const id =
-      v?.raf_form_id ??
-      v?.formId ??
-      v?.clinic_form_id ??
-      v?.clinicFormId ??
-      v?.clinic_form?._id ??
-      v?.clinicForm?._id ??
-      v?.form?._id ??
-      v?._id;
-    if (!id) return undefined;
-    const s = String(id).trim();
-    return s ? s : undefined;
-  };
-
-  const normaliseType = (v: any) =>
-    String(v ?? "")
-      .trim()
-      .toLowerCase();
-
   const rafLike = list.find((a: any) => {
     const t =
       normaliseType(a?.form_type) ||
@@ -674,6 +719,7 @@ export default function RafStep() {
 
   const [questions, setQuestions] = useState<Question[]>([]);
   const [answers, setAnswers] = useState<Answers>({});
+  const answersRef = useRef<Answers>({});
   const [saveFlash, setSaveFlash] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<number | undefined>(() =>
     resolveInitialSessionId(search as any)
@@ -681,6 +727,11 @@ export default function RafStep() {
   const [formMetaServiceId, setServiceId] = useState<string | null>(
     serviceIdParam ?? null
   );
+
+  // Keep a live ref for "flush on tab switch"
+  useEffect(() => {
+    answersRef.current = answers;
+  }, [answers]);
 
   // keep URL session_id in sync if it changes later
   useEffect(() => {
@@ -714,36 +765,96 @@ export default function RafStep() {
     };
   }, [slug, sessionId]);
 
-  // Load cached answers (and last_raf fallback) on mount
-  useEffect(() => {
-    try {
+  // ✅ Persist answers immediately (so switching steps/tabs cannot lose last keystroke)
+  const persistNow = useCallback(
+    (next: Answers) => {
       if (!slug) return;
+      persistAnswersToStorage(slug, next, sessionId);
+    },
+    [slug, sessionId]
+  );
 
-      const cached =
-        localStorage.getItem(rafStorageKey(slug)) ||
-        localStorage.getItem(legacyRafStorageKey(slug)) ||
-        localStorage.getItem(`assessment.answers.${slug}`);
+  // ✅ Restore cached answers on mount AND whenever slug changes
+  useEffect(() => {
+    if (!slug) return;
+    const restored = readAnswersFromStorage(slug);
+    if (restored) {
+      setAnswers(restored);
+    }
+  }, [slug]);
 
-      if (cached) {
-        setAnswers(JSON.parse(cached));
+  // ✅ Sync answers across browser tabs (storage event fires only in OTHER tabs)
+  useEffect(() => {
+    if (!slug) return;
+
+    const answerKeys = new Set<string>([
+      rafStorageKey(slug),
+      legacyRafStorageKey(slug),
+      `assessment.answers.${slug}`,
+    ]);
+
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key) return;
+
+      // answers sync
+      if (answerKeys.has(e.key)) {
+        const parsed = safeJsonParse<Answers>(e.newValue || "");
+        if (parsed && typeof parsed === "object") {
+          setAnswers((prev) => {
+            const prevJson = JSON.stringify(prev || {});
+            const nextJson = JSON.stringify(parsed || {});
+            if (prevJson === nextJson) return prev;
+            return parsed;
+          });
+        }
         return;
       }
 
-      const lastRaw = localStorage.getItem("last_raf");
-      if (lastRaw) {
-        try {
-          const parsed = JSON.parse(lastRaw);
-          if (parsed?.slug === slug && parsed.answers) {
-            setAnswers(parsed.answers);
-          }
-        } catch {
-          // ignore
+      // section sync
+      if (e.key === rafSectionKey(slug)) {
+        const n = Number(e.newValue);
+        if (Number.isFinite(n) && n >= 0) {
+          setSectionIdx((prev) => (prev === n ? prev : n));
         }
       }
-    } catch {
-      // ignore
-    }
+    };
+
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, [slug]);
+
+  // ✅ Flush answers when user changes browser tab / hides page / navigates away
+  useEffect(() => {
+    if (!slug) return;
+
+    const flush = () => {
+      try {
+        persistNow(answersRef.current || {});
+      } catch {
+        // ignore
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    // pageshow helps in bfcache cases
+    const onPageShow = () => {
+      const restored = readAnswersFromStorage(slug);
+      if (restored) setAnswers(restored);
+    };
+    window.addEventListener("pageshow", onPageShow);
+
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }, [slug, persistNow]);
 
   // Fetch RAF form + questions
   useEffect(() => {
@@ -787,7 +898,6 @@ export default function RafStep() {
         }
 
         // ✅ ensure local storage reflects the current assignment BEFORE fetching
-        // (important if fetchRafFormForService internally reads raf_form_id.*)
         try {
           if (assignedRafFormId) {
             localStorage.setItem(rafFormIdKey(slug), String(assignedRafFormId));
@@ -853,14 +963,6 @@ export default function RafStep() {
 
           localStorage.setItem(`raf_labels.${slug}`, JSON.stringify(labelMap));
 
-          const formMeta = {
-            formId: result._id,
-            serviceId: result.service_id ?? null,
-            slug,
-            name: result.name ?? null,
-            description: result.description ?? null,
-          };
-
           const effectiveFormId = assignedRafFormId || String(result._id);
           localStorage.setItem(rafFormIdKey(slug), effectiveFormId);
         } catch {
@@ -879,29 +981,6 @@ export default function RafStep() {
       done = true;
     };
   }, [slug, serviceIdParam]);
-
-  // Persist answers to localStorage + dispatch event
-  useEffect(() => {
-    try {
-      if (!slug) return;
-      const json = JSON.stringify(answers);
-      localStorage.setItem(rafStorageKey(slug), json);
-      localStorage.setItem(legacyRafStorageKey(slug), json);
-      localStorage.setItem(`assessment.answers.${slug}`, json);
-
-      window.dispatchEvent(
-        new CustomEvent("raf:updated", {
-          detail: {
-            slug,
-            sessionId,
-            count: Object.keys(answers || {}).length,
-          },
-        })
-      );
-    } catch {
-      // ignore
-    }
-  }, [slug, answers, sessionId]);
 
   /* -------------------- visibility & progress -------------------- */
 
@@ -999,7 +1078,9 @@ export default function RafStep() {
   useEffect(() => {
     if (!slug) return;
     try {
-      const raw = localStorage.getItem(rafSectionKey(slug));
+      const raw =
+        localStorage.getItem(rafSectionKey(slug)) ||
+        sessionStorage.getItem(rafSectionKey(slug));
       if (!raw) return;
       const n = Number(raw);
       if (Number.isFinite(n) && n >= 0) {
@@ -1017,11 +1098,13 @@ export default function RafStep() {
     }
   }, [sections.order.length, sectionIdx]);
 
-  // Persist section index
+  // Persist section index (with "write only if changed" semantics)
   useEffect(() => {
     if (!slug) return;
     try {
-      localStorage.setItem(rafSectionKey(slug), String(sectionIdx));
+      const key = rafSectionKey(slug);
+      const val = String(sectionIdx);
+      writeStorageIfChanged(key, val);
     } catch {
       // ignore
     }
@@ -1087,9 +1170,17 @@ export default function RafStep() {
 
   /* ------------------------ local actions ------------------------- */
 
-  const onChange = (id: string, value: any) => {
-    setAnswers((prev) => ({ ...prev, [id]: value }));
-  };
+  // ✅ IMPORTANT: write-through persistence inside setState
+  const onChange = useCallback(
+    (id: string, value: any) => {
+      setAnswers((prev) => {
+        const next = { ...(prev || {}), [id]: value };
+        persistNow(next);
+        return next;
+      });
+    },
+    [persistNow]
+  );
 
   const clearAnswers = () => {
     try {
@@ -1097,8 +1188,16 @@ export default function RafStep() {
       localStorage.removeItem(legacyRafStorageKey(slug));
       localStorage.removeItem(`assessment.answers.${slug}`);
       localStorage.removeItem("last_raf");
+      sessionStorage.removeItem(rafStorageKey(slug));
+      sessionStorage.removeItem(legacyRafStorageKey(slug));
+      sessionStorage.removeItem(`assessment.answers.${slug}`);
     } catch {}
     setAnswers({});
+    try {
+      localStorage.removeItem(rafSectionKey(slug));
+      sessionStorage.removeItem(rafSectionKey(slug));
+    } catch {}
+    setSectionIdx(0);
   };
 
   const onBack = () => {
@@ -1145,7 +1244,7 @@ export default function RafStep() {
     setSubmitting(true);
     setSaveFlash("Saving…");
 
-    const answersToSend: Answers = { ...answers };
+    const answersToSend: Answers = { ...(answers || {}) };
     const sid = sessionId != null ? Number(sessionId) : undefined;
 
     try {
@@ -1686,7 +1785,7 @@ function QuestionField({
             return (
               <label
                 key={opt.value}
-                className={`flex items_center gap-2 rounded-xl border px-3 py-2 text-sm ${
+                className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${
                   checked
                     ? "border-emerald-400 bg-emerald-50"
                     : "border-slate-200 bg-white"

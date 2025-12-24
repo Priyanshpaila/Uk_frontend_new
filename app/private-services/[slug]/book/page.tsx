@@ -15,6 +15,11 @@ import { useAuth } from "@/components/auth/AuthProvider";
 import { fetchServiceBySlug, type ServiceDetail } from "@/lib/api";
 import toast from "react-hot-toast";
 import { useCart } from "@/components/cart/cart-context";
+import {
+  ensureDraftOrder,
+  getOrderIdForSlug,
+  ORDER_ID_KEY,
+} from "./booking-order";
 
 /* -------------------------------------------------------------------------- */
 /*                              STEP CONFIG / TYPES                           */
@@ -272,7 +277,8 @@ function clearBookingStateForSlug(slug: string) {
     // order-specific
     "order_id",
     "order_last_body",
-
+    ORDER_ID_KEY(slug),
+ 
     // consultation session
     "consultation_session_id",
     "pe_consultation_session_id",
@@ -677,7 +683,74 @@ export default function BookServicePage() {
     [hasCartItems, isLoggedIn]
   );
 
-  const handleNext = () => {
+    const cartSignature = React.useMemo(() => {
+    const safe = (cartItems || []).map((ci: any) => ({
+      sku: ci.sku || "",
+      name: ci.name || "",
+      qty: Number(ci.qty || 1),
+      unitMinor:
+        typeof ci.unitMinor === "number"
+          ? ci.unitMinor
+          : typeof ci.priceMinor === "number"
+          ? ci.priceMinor
+          : ci.price
+          ? Math.round(Number(ci.price) * 100)
+          : 0,
+      variation: ci.variation || ci.variations || ci.optionLabel || ci.label || "",
+    }));
+    // stable ordering
+    safe.sort((a, b) => (a.sku + a.variation).localeCompare(b.sku + b.variation));
+    return JSON.stringify(safe);
+  }, [cartItems]);
+
+  const ensureOrderDebounceRef = React.useRef<number | null>(null);
+
+  React.useEffect(() => {
+    // Draft order creation should happen only when we have user + service + cart.
+    if (!slug) return;
+    if (!isLoggedIn) return;
+    if (!service?._id) return;
+    if (!cartItems?.length) return;
+
+    // avoid doing it while on login step (optional but cleaner)
+    if (currentStep === "login") return;
+
+    if (ensureOrderDebounceRef.current) {
+      window.clearTimeout(ensureOrderDebounceRef.current);
+    }
+
+    ensureOrderDebounceRef.current = window.setTimeout(() => {
+      const userId =
+        (user as any)?._id ||
+        (user as any)?.id ||
+        "";
+
+      if (!userId) return;
+
+      void ensureDraftOrder({
+        slug,
+        userId: String(userId),
+        serviceId: String((service as any)._id),
+        serviceName: (service as any)?.name,
+        cartItems,
+        currency: "GBP",
+      }).catch((err) => {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("ensureDraftOrder failed:", err);
+        }
+      });
+    }, 250);
+
+    return () => {
+      if (ensureOrderDebounceRef.current) {
+        window.clearTimeout(ensureOrderDebounceRef.current);
+        ensureOrderDebounceRef.current = null;
+      }
+    };
+  }, [slug, isLoggedIn, service?._id, (service as any)?.name, cartSignature, currentStep, cartItems, user]);
+
+
+  const handleNext = async () => {
     if (!nextStep) return;
 
     const guard = canProceedFrom(currentStep);
@@ -686,8 +759,32 @@ export default function BookServicePage() {
       return;
     }
 
+    // ✅ Guarantee draft order exists before payment/success even if calendar step removed
+    if ((nextStep === "payment" || nextStep === "success") && isLoggedIn && service?._id && cartItems.length) {
+      const userId = (user as any)?._id || (user as any)?.id || "";
+      if (!userId) {
+        toast.error("Please log in again.");
+        return;
+      }
+
+      try {
+        await ensureDraftOrder({
+          slug,
+          userId: String(userId),
+          serviceId: String((service as any)._id),
+          serviceName: (service as any)?.name,
+          cartItems,
+          currency: "GBP",
+        });
+      } catch (e: any) {
+        toast.error(e?.message || "Unable to prepare your order. Please try again.");
+        return;
+      }
+    }
+
     goToStep(nextStep);
   };
+
 
   const handlePrev = () => {
     if (!prevStep) return;

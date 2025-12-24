@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useCart } from "@/components/cart/cart-context";
@@ -57,6 +57,195 @@ function humanTypeLabel(rawType: string | null | undefined) {
   }
 }
 
+/* ------------------------------------------------------------------ */
+/*             NEW: Clear only booking/order flow local keys           */
+/* ------------------------------------------------------------------ */
+
+function removeKeysFromStorage(
+  store: Storage,
+  keys: string[],
+  prefixes: string[]
+) {
+  try {
+    // exact keys
+    for (const k of keys) {
+      try {
+        store.removeItem(k);
+      } catch {
+        // ignore per key
+      }
+    }
+
+    // prefixed keys (remove all that start with prefix)
+    // iterate backwards to safely remove while iterating
+    for (let i = store.length - 1; i >= 0; i--) {
+      const k = store.key(i);
+      if (!k) continue;
+      if (prefixes.some((p) => k.startsWith(p))) {
+        try {
+          store.removeItem(k);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function clearBookingFlowStorage(opts: {
+  slug?: string;
+  ref?: string;
+  keepSuccessDone?: boolean;
+}) {
+  if (typeof window === "undefined") return;
+
+  const slug = (opts.slug || "").trim();
+  const ref = (opts.ref || "").trim();
+  const keepSuccessDone = opts.keepSuccessDone ?? true;
+
+  // keys you likely want to purge after completing a booking
+  const globalKeys: string[] = [
+    // core order linkage (this is what causes “editing previous order”)
+    "order_id",
+    "order_ref",
+
+    // appointment linkage
+    "appointment_id",
+    "appointment_start_at",
+    "appointment_end_at",
+    "appointment_at",
+    "appointment_start",
+    "booking_start",
+
+    // ✅ ADD: appointment selection keys written by persistAppointmentSelection()
+    "appointment_date",
+    "appointment_time",
+    "appointment_time_label",
+    "appointment_pretty",
+
+    // payment + transient state
+    "last_payment",
+    "orders_dirty",
+    "clear_cart",
+    "after_success_redirect",
+    "pe_selected_treatments",
+
+    // slot selection fallbacks
+    "selected_slot_iso",
+    "selected_time_iso",
+    "selected_slot",
+
+    // ✅ ADD: extra common slot selection keys you store
+    "selected_label",
+    "selected_iso",
+
+    // ✅ ADD: schedule/service linkage (from your screenshot)
+    "service_id",
+    "service_slug",
+    "schedule_id",
+
+    // ✅ ADD: medium cache (from your screenshot)
+    "appointment_medium",
+
+    // local order preview cache (from your screenshot)
+    "local_orders",
+
+    // any temp session ids (if you store them)
+    "consultation_session_id",
+  ];
+
+  // slug-scoped keys (you have many of these)
+  const slugKeys: string[] = slug
+    ? [
+        `order_id.${slug}`,
+        `order_ref.${slug}`,
+        `schedule_id.${slug}`,
+        `booking_step.${slug}`,
+
+        // ✅ ADD: per-service linkage caches
+        `service_id.${slug}`,
+        `service_slug.${slug}`,
+
+        // ✅ ADD: per-service selection keys (from your screenshot)
+        `selected_iso.${slug}`,
+        `selected_label.${slug}`,
+
+        // ✅ ADD: per-service appointment medium cache (from your screenshot)
+        `appointment_medium.${slug}`,
+
+        // RAF / assessment keys (avoid carrying answers into next order)
+        `raf_answers.${slug}`,
+        `raf.answers.${slug}`,
+        `raf_answers_${slug}`, // some apps used underscore naming
+        `raf.answers_${slug}`,
+        `assessment.answers.${slug}`,
+        `assessmentanswers_${slug}`,
+        `raf_labels.${slug}`,
+        `raf_labels_${slug}`,
+        `raf_form_id.${slug}`,
+        `raf_form_id_${slug}`,
+
+        // also remove service-scoped ids if you store them
+        `schedule_id_${slug}`,
+        `order_id_${slug}`,
+        `order_ref_${slug}`,
+      ]
+    : [];
+
+  // remove any appointment_created flags for this slug
+  const prefixes: string[] = [];
+
+  if (slug) {
+    // ✅ existing
+    prefixes.push(`appointment_created.${slug}.`);
+
+    // ✅ ADD: zoom meeting cache per slot (dynamic key contains ISO)
+    prefixes.push(`zoom_meeting.${slug}.`);
+
+    // ✅ ADD: if you ever store meeting under this pattern
+    prefixes.push(`zoom_meeting_${slug}.`);
+  }
+
+  // ✅ ADD: global dynamic prefixes we can't list as static keys
+  // - success_done_<ref> is saved by your success flow
+  // - zoom_email_sent.<appointmentId> is saved by CalendarStep
+  // - zoom_email_sent.<slug>.<iso> can also exist depending on your earlier builds
+  prefixes.push("success_done_");
+  prefixes.push("zoom_email_sent.");
+  prefixes.push("zoom_email_sent_");
+
+  // optionally remove per-order success flag too
+  // NOTE: we already remove success_done_* via prefixes above if keepSuccessDone is false.
+  // If you want to keep success flags by default, we conditionally apply below.
+  if (ref && !keepSuccessDone) {
+    globalKeys.push(`success_done_${ref}`);
+  }
+
+  // Apply to both localStorage and sessionStorage
+  // If keepSuccessDone === true, do NOT remove success_done_*.
+  // So we pass prefixes conditionally.
+  const effectivePrefixes =
+    keepSuccessDone === true
+      ? prefixes.filter((p) => p !== "success_done_")
+      : prefixes;
+
+  removeKeysFromStorage(
+    window.localStorage,
+    [...globalKeys, ...slugKeys],
+    effectivePrefixes
+  );
+  removeKeysFromStorage(
+    window.sessionStorage,
+    [...globalKeys, ...slugKeys],
+    effectivePrefixes
+  );
+
+  // IMPORTANT: Do NOT remove auth/user keys:
+  // session_token, token, pharmacy_user, user, etc.
+}
+
 export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
   const search = useSearchParams();
   const router = useRouter();
@@ -64,11 +253,6 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
 
   const [cleared, setCleared] = useState(false);
   const clearingRef = useRef(false);
-
-  const handleBackToHome = () => {
-    // Remove this success page from history and go home.
-    router.replace("/");
-  };
 
   // ---- Reference from URL or last_payment (baseline) ----
   const ref = useMemo(() => {
@@ -80,11 +264,11 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
 
       const paramRef =
         (search.get("ref") || search.get("reference") || "") + "";
-
       const lastRef = last?.ref || "";
       return paramRef || lastRef;
     } catch {
-      return ((search.get("ref") || search.get("reference") || "") + "") as string;
+      return ((search.get("ref") || search.get("reference") || "") +
+        "") as string;
     }
   }, [search]);
 
@@ -280,10 +464,7 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
         u.username ||
         (typeof u.contact === "object" ? u.contact?.email : undefined);
 
-      setPatient({
-        name,
-        email,
-      });
+      setPatient({ name, email });
     } catch {
       // ignore
     }
@@ -294,6 +475,44 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
     () => orderReference || ref,
     [orderReference, ref]
   );
+
+  // ✅ NEW: cleanup function (used by buttons + unmount + pagehide)
+  const cleanupFlow = useCallback(() => {
+    clearBookingFlowStorage({
+      slug: effectiveServiceSlug || undefined,
+      ref: effectiveRef || undefined,
+      keepSuccessDone: true, // keep your per-ref completion flag
+    });
+  }, [effectiveServiceSlug, effectiveRef]);
+
+  const handleBackToHome = () => {
+    // Clear booking flow keys before leaving success page
+    cleanupFlow();
+    router.replace("/");
+  };
+
+  // ✅ NEW: clear flow storage on exit/navigation away
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const onPageHide = () => {
+      cleanupFlow();
+    };
+    const onBeforeUnload = () => {
+      cleanupFlow();
+    };
+
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("beforeunload", onBeforeUnload);
+
+    return () => {
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("beforeunload", onBeforeUnload);
+
+      // also run on unmount
+      cleanupFlow();
+    };
+  }, [cleanupFlow]);
 
   // ---- RAF / assessment answers summary ----
   useEffect(() => {
@@ -310,7 +529,9 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
       const answersRaw =
         window.localStorage.getItem(`assessmentanswers.${slug}`) ||
         window.localStorage.getItem(`raf.answers.${slug}`) ||
+        window.localStorage.getItem(`raf.answers_${slug}`) ||
         window.localStorage.getItem(`raf_answers.${slug}`) ||
+        window.localStorage.getItem(`raf_answers_${slug}`) ||
         "";
 
       const labels = labelsRaw ? safeParseJson<any>(labelsRaw) || {} : {};
@@ -328,15 +549,12 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
 
           const val = answers[key];
           let value = "";
-          if (Array.isArray(val)) {
-            value = val.join(", ");
-          } else if (val != null && typeof val === "object") {
-            if ("label" in val) value = String(val.label);
-            else if ("value" in val) value = String(val.value);
+          if (Array.isArray(val)) value = val.join(", ");
+          else if (val != null && typeof val === "object") {
+            if ("label" in val) value = String((val as any).label);
+            else if ("value" in val) value = String((val as any).value);
             else value = JSON.stringify(val);
-          } else if (val != null) {
-            value = String(val);
-          }
+          } else if (val != null) value = String(val);
 
           if (!value) continue;
           rows.push({ label, value });
@@ -509,9 +727,8 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
         setInvoiceItems(items);
         setInvoiceTotalMinor(amountMinor);
 
-        // Clean up transient client-side data
+        // Clean up transient client-side data (keep core flow keys until leaving this page)
         if (typeof window !== "undefined") {
-          window.localStorage.removeItem("last_payment");
           window.sessionStorage.removeItem("pe_selected_treatments");
         }
       } catch {
@@ -626,7 +843,6 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
 
   /* ------------------------------------------------------------------ */
   /*                   Poll backend for order status (ref)              */
-  /*   (still useful if another system updates payment/booking later)   */
   /* ------------------------------------------------------------------ */
   useEffect(() => {
     if (!effectiveRef) return;
@@ -642,7 +858,6 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
         const pay = String(data?.payment_status || "");
         const book = String(data?.booking_status || "");
 
-        // Only update if we don't already have a value from /orders/:id
         setPaymentStatus((prev) => prev || pay);
         setBookingStatus((prev) => prev || book);
 
@@ -745,7 +960,7 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
 
           <div className="flex flex-col items-start gap-1 text-xs md:items-end md:text-sm">
             <span className="rounded-full bg-black/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-50">
-             Booking summary
+              Booking summary
             </span>
             {effectiveRef && (
               <span className="text-emerald-50/90">
@@ -979,6 +1194,7 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <Link
               href="/profile?tab=orders"
+              onClick={() => cleanupFlow()}
               className="inline-flex items-center justify-center rounded-full bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700"
             >
               View my orders
@@ -995,6 +1211,7 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
             {effectiveServiceSlug && (
               <Link
                 href={`/private-services/${effectiveServiceSlug}/book?step=treatments`}
+                onClick={() => cleanupFlow()}
                 className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-900 hover:bg-slate-50"
               >
                 Book another treatment
@@ -1003,9 +1220,8 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
           </div>
 
           <p className="text-[11px] text-slate-500">
-            You can safely close this page now.
-            A copy of your booking details will also be
-            available in your account.
+            You can safely close this page now. A copy of your booking details
+            will also be available in your account.
           </p>
         </section>
       </div>

@@ -1,11 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef,useState } from "react";
 import Link from "next/link";
 import Script from "next/script";
 import { useSearchParams, useRouter } from "next/navigation";
 import { useCart } from "@/components/cart/cart-context";
 import jsPDF from "jspdf";
+
+import {
+  ensureDraftOrder,
+  getOrderIdForSlug,
+  setOrderIdForSlug,
+} from "../booking-order";
 
 import {
   makeRefFromSlug,
@@ -15,10 +21,12 @@ import {
   createRyftSessionApi,
   ensureRyftSdkLoaded,
   markOrderPaidApi,
-  updateOrderApi, // ✅ used for test success
+  updateOrderApi,
   getOrderByIdApi,
   sendEmailApi,
-  getStoredUserFromStorage, // 👈 fallback source for user details
+  getStoredUserFromStorage,
+  resolveUserIdFromStorage,
+  fetchScheduleForServiceSlug,
   type CartItem,
   type CartTotals,
   type LastPaymentPayload,
@@ -28,12 +36,11 @@ import {
 
 type PaymentStepProps = {
   serviceSlug?: string;
-  // When provided, use this to jump to "Success" in the multi-step flow
   goToSuccessStep?: () => void;
 };
 
 /* ------------------------------------------------------------------ */
-/*                   Shared helpers (money + invoice)                 */
+/* Helpers                                                            */
 /* ------------------------------------------------------------------ */
 
 const formatMinorGBP = (minor?: number | null): string => {
@@ -41,7 +48,22 @@ const formatMinorGBP = (minor?: number | null): string => {
   return `£${(minor / 100).toFixed(2)}`;
 };
 
-// Build an invoice PDF for a given order + payment payload
+function readIdFromLocal(keys: string[]): string | null {
+  if (typeof window === "undefined") return null;
+  for (const k of keys) {
+    try {
+      const v =
+        window.localStorage.getItem(k) ||
+        window.sessionStorage.getItem(k) ||
+        null;
+      if (v && v !== "undefined" && v !== "null") return String(v);
+    } catch {}
+  }
+  return null;
+}
+
+/* ---------------- Invoice helpers (unchanged from your file) ---------------- */
+
 async function generateInvoicePdf(
   order: Partial<OrderDto> & { email?: string },
   payment: LastPaymentPayload
@@ -79,23 +101,18 @@ async function generateInvoicePdf(
     (order.meta as any)?.appointment_start_at ||
     null;
 
-  /* ------------------------ Top bar & header ------------------------ */
-
-  // Thin emerald accent line at very top
-  doc.setFillColor(16, 185, 129); // emerald-500
+  doc.setFillColor(16, 185, 129);
   doc.rect(0, 0, pageWidth, 6, "F");
 
   const headerTopY = 36;
 
-  // Brand name (coloured)
   doc.setFontSize(22);
-  doc.setTextColor(16, 185, 129); // emerald-500
+  doc.setTextColor(16, 185, 129);
   doc.text("Pharmacy Express", margin, headerTopY);
 
-  // Company meta under brand
   let companyY = headerTopY + 13;
   doc.setFontSize(11);
-  doc.setTextColor(75, 85, 99); // gray-600
+  doc.setTextColor(75, 85, 99);
   doc.text("United Kingdom", margin, companyY);
   companyY += lineHeight;
   doc.text("Phone: +44 (0) 0000 000000", margin, companyY);
@@ -104,25 +121,20 @@ async function generateInvoicePdf(
   companyY += lineHeight;
   doc.text("Website: safescript.co.uk", margin, companyY);
 
-  // "Invoice" title on the right
   doc.setFontSize(26);
-  doc.setTextColor(15, 23, 42); // slate-900
+  doc.setTextColor(15, 23, 42);
   doc.text("Invoice", pageWidth - margin, headerTopY, { align: "right" });
-
-  /* ------------------------ Bill to / Details band ------------------- */
 
   const bandY = 130;
   const bandH = 80;
   const colW = contentWidth / 3;
 
-  // Light background band
-  doc.setFillColor(249, 250, 251); // gray-50
+  doc.setFillColor(249, 250, 251);
   doc.rect(margin, bandY, contentWidth, bandH, "F");
 
   doc.setFontSize(11);
   doc.setTextColor(15, 23, 42);
 
-  // Column 1: Bill to
   let x1 = margin + 10;
   let y1 = bandY + 20;
 
@@ -139,7 +151,6 @@ async function generateInvoicePdf(
     y1 += lineHeight;
   }
 
-  // Column 2: Ship to (same as Bill to)
   let x2 = margin + colW + 10;
   let y2 = bandY + 20;
 
@@ -157,7 +168,6 @@ async function generateInvoicePdf(
     y2 += lineHeight;
   }
 
-  // Column 3: Invoice details
   let x3 = margin + colW * 2 + 10;
   let y3 = bandY + 20;
 
@@ -176,20 +186,16 @@ async function generateInvoicePdf(
   y3 += lineHeight;
   doc.text(`Service: ${serviceName}`, x3, y3);
 
-  /* ------------------------ Items table ------------------------------ */
-
   let y = bandY + bandH + 40;
   const tableHeaderY = y;
   const tableHeight = 22;
 
-  // Column positions
   const descX = margin + 10;
   const qtyX = margin + contentWidth * 0.55;
   const unitX = margin + contentWidth * 0.7;
   const amountX = margin + contentWidth * 0.85;
 
-  // Header background
-  doc.setFillColor(243, 244, 246); // gray-100
+  doc.setFillColor(243, 244, 246);
   doc.rect(
     margin,
     tableHeaderY - tableHeight + 6,
@@ -207,9 +213,8 @@ async function generateInvoicePdf(
 
   y += 14;
   doc.setFontSize(10);
-  doc.setTextColor(31, 41, 55); // gray-800
+  doc.setTextColor(31, 41, 55);
 
-  // Items (fallback to single line if empty)
   const items: LastPaymentItem[] =
     (payment.items && payment.items.length
       ? payment.items
@@ -244,15 +249,11 @@ async function generateInvoicePdf(
     const descriptionLines: string[] = [];
     const baseName = String(item.name || "Item");
     descriptionLines.push(baseName);
-    if (item.variations) {
-      descriptionLines.push(String(item.variations));
-    }
+    if (item.variations) descriptionLines.push(String(item.variations));
 
     let tempY = y;
     descriptionLines.forEach((line) => {
-      doc.text(line, descX, tempY, {
-        maxWidth: qtyX - descX - 12,
-      });
+      doc.text(line, descX, tempY, { maxWidth: qtyX - descX - 12 });
       tempY += lineHeight;
     });
 
@@ -263,16 +264,12 @@ async function generateInvoicePdf(
     y = tempY + 6;
   });
 
-  // Line under table
-  doc.setDrawColor(229, 231, 235); // gray-200
+  doc.setDrawColor(229, 231, 235);
   doc.line(margin, y, pageWidth - margin, y);
-
-  /* ------------------------ Customer message & totals ---------------- */
 
   const messageYStart = y + 24;
   const totalsYStart = y + 12;
 
-  // Left: message
   doc.setFontSize(10);
   doc.setTextColor(15, 23, 42);
   doc.text("Customer message", margin, messageYStart);
@@ -284,16 +281,12 @@ async function generateInvoicePdf(
     { maxWidth: contentWidth * 0.5 }
   );
 
-  // Right: totals
   const totalsX = margin + contentWidth * 0.55;
 
   let subtotalMinor = 0;
-  items.forEach((i) => {
-    subtotalMinor += Number(i.totalMinor || 0);
-  });
-  if (!subtotalMinor && payment.amountMinor) {
+  items.forEach((i) => (subtotalMinor += Number(i.totalMinor || 0)));
+  if (!subtotalMinor && payment.amountMinor)
     subtotalMinor = payment.amountMinor;
-  }
 
   const taxMinor = 0;
   const shippingMinor = 0;
@@ -323,19 +316,15 @@ async function generateInvoicePdf(
   doc.setFontSize(12);
   doc.text(formatMinorGBP(totalMinor), valueX, ty, { align: "right" });
 
-  /* ------------------------ Footer ---------------------------------- */
-
   const footerY = pageHeight - 40;
   doc.setFontSize(9);
-  doc.setTextColor(156, 163, 175); // gray-400
+  doc.setTextColor(156, 163, 175);
   doc.text(
     "This invoice was generated by Pharmacy Express. For questions, please contact support@safescript.co.uk",
     margin,
     footerY,
     { maxWidth: contentWidth }
   );
-
-  /* ------------------------ Export as File --------------------------- */
 
   const blob = doc.output("blob");
   const fileName = `invoice-${ref}.pdf`;
@@ -350,7 +339,6 @@ async function generateInvoicePdf(
   return file;
 }
 
-// Fetch order + send email with invoice PDF attached
 async function sendInvoiceEmailForOrder(
   orderId: string | null,
   payment: LastPaymentPayload,
@@ -359,7 +347,6 @@ async function sendInvoiceEmailForOrder(
   try {
     console.log("▶ sendInvoiceEmailForOrder start", { orderId, payment });
 
-    // 1) Try to get full order from backend (preferred)
     let order: Partial<OrderDto> & { email?: string } = {};
     if (orderId) {
       try {
@@ -372,7 +359,6 @@ async function sendInvoiceEmailForOrder(
       }
     }
 
-    // 2) Fallback to stored user if we still don't have email
     if (!order.email) {
       const stored = getStoredUserFromStorage();
       if (stored?.email) {
@@ -387,16 +373,14 @@ async function sendInvoiceEmailForOrder(
 
     const ref = order.reference || payment.ref;
     const email = order.email || "";
-
     if (!email) {
-      console.warn(
-        "No email found on order or stored user; skipping invoice email.",
-        { order, payment }
-      );
+      console.warn("No email found; skipping invoice email.", {
+        order,
+        payment,
+      });
       return;
     }
 
-    // Friendly service name fallback from slug if needed
     const serviceName =
       order.service_name ||
       (slug || payment.slug || "")
@@ -435,33 +419,21 @@ async function sendInvoiceEmailForOrder(
       year: new Date().getFullYear().toString(),
     };
 
-    // ✅ Single call – NO attachments at all
-    try {
-      console.log("▶ Sending payment confirmation email", {
-        to: email,
-        subject,
-      });
+    await sendEmailApi({
+      to: email,
+      subject,
+      template: "paymentconfirmed",
+      context: baseContext,
+    });
 
-      await sendEmailApi({
-        to: email,
-        subject,
-        template: "paymentconfirmed", // keep existing template
-        context: baseContext,
-        // ❌ no attachments
-      });
-
-      console.log("✅ Invoice / payment email sent successfully (no attachment)");
-    } catch (err) {
-      console.error("❌ Failed to send invoice / payment email", err);
-    }
+    console.log("✅ payment email sent successfully");
   } catch (err) {
     console.error("Failed in sendInvoiceEmailForOrder wrapper:", err);
   }
 }
 
-
 /* ------------------------------------------------------------------ */
-/*                          Component body                            */
+/* Component                                                          */
 /* ------------------------------------------------------------------ */
 
 export default function PaymentStep({
@@ -470,41 +442,145 @@ export default function PaymentStep({
 }: PaymentStepProps) {
   const search = useSearchParams();
   const router = useRouter();
-
   const { items, clearCart } = useCart();
 
-  // ---- clear any stale payment flags on mount ----
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
       window.localStorage.removeItem("last_payment");
       window.localStorage.removeItem("orders_dirty");
       window.localStorage.removeItem("clearCart_cart");
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, []);
 
-  // ---- Effective slug (from parent prop or ?slug=...) ----
   const effectiveSlug = useMemo(() => {
     const fromProp = (serviceSlug || "").toString();
-    const fromQuery = (search?.get("slug") || "").toString();
+    const fromQuery = (
+      search?.get("slug") ||
+      search?.get("service_slug") ||
+      ""
+    ).toString();
     return fromProp || fromQuery;
   }, [serviceSlug, search]);
 
-  // ---- Order + appointment ----
-  const orderId = useMemo(() => {
-    const fromQuery = search?.get("order");
-    if (fromQuery) return fromQuery;
-    if (typeof window === "undefined") return null;
-    try {
-      return window.localStorage.getItem("order_id");
-    } catch {
-      return null;
-    }
-  }, [search]);
+  // cart totals
+  const lines = (items || []) as CartItem[];
+  const totals: CartTotals = useMemo(() => computeCartTotals(lines), [lines]);
+  const fmt = (minor: number) => formatMinorGBP(minor);
+  const totalDisplay = useMemo(
+    () => fmt(totals.totalMinor),
+    [totals.totalMinor]
+  );
 
-    // ---- Order reference (PTCN code) from backend ----
+  
+
+  // appointment
+  const appointmentAtIso = search?.get("appointment_at") || null;
+  const appointmentAtPretty = useMemo(() => {
+    if (!appointmentAtIso) return null;
+    const d = new Date(appointmentAtIso);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleString("en-GB", {
+      weekday: "short",
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }, [appointmentAtIso]);
+
+  // ✅ OrderId is stateful now (we may create/ensure it)
+  const [orderId, setOrderId] = useState<string | null>(null);
+  const [orderInitError, setOrderInitError] = useState<string | null>(null);
+
+  // ✅ Ensure we have exactly one order id for this slug
+  useEffect(() => {
+    if (!effectiveSlug) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setOrderInitError(null);
+
+        // 1) If URL provides ?order=..., reuse it and sync storage
+        const fromQuery = search?.get("order");
+        if (fromQuery) {
+          setOrderId(String(fromQuery));
+          setOrderIdForSlug(effectiveSlug, String(fromQuery));
+          return;
+        }
+
+        // 2) If storage has order_id.<slug> or order_id, reuse it
+        const existing = getOrderIdForSlug(effectiveSlug);
+        if (existing) {
+          setOrderId(String(existing));
+          return;
+        }
+
+        // 3) Otherwise, create/ensure draft order (single source of truth)
+        const userId =
+          readIdFromLocal(["user_id", "pe_user_id", "userId", "patient_id"]) ||
+          resolveUserIdFromStorage();
+
+        if (!userId) {
+          throw new Error("You need to be logged in to pay.");
+        }
+
+        let serviceId =
+          readIdFromLocal(["service_id", "pe_service_id", "serviceId"]) || null;
+
+        let serviceName: string | undefined = undefined;
+
+        // best-effort: resolve serviceId from schedule if not present
+        if (!serviceId) {
+          try {
+            const sch: any = await fetchScheduleForServiceSlug(effectiveSlug);
+            const fromSchedule =
+              sch?.service_id ||
+              sch?.serviceId ||
+              (sch?.service && (sch.service._id || sch.service.id)) ||
+              null;
+            if (fromSchedule) serviceId = String(fromSchedule);
+            if (sch?.name) serviceName = String(sch.name);
+          } catch {
+            // ignore
+          }
+        }
+
+        if (!serviceId) {
+          throw new Error(
+            "Missing service id; please start again from the service page."
+          );
+        }
+
+        const ensured = await ensureDraftOrder({
+          slug: effectiveSlug,
+          userId: String(userId),
+          serviceId: String(serviceId),
+          serviceName,
+          cartItems: lines,
+          currency: "GBP",
+          startAt: appointmentAtIso || null,
+        });
+
+        if (cancelled) return;
+        setOrderId(String(ensured));
+      } catch (e: any) {
+        if (!cancelled)
+          setOrderInitError(
+            e?.message || "Failed to prepare order for payment."
+          );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [effectiveSlug, search, lines, appointmentAtIso]);
+
+  // ---- order reference from backend
   const [orderReference, setOrderReference] = useState<string | null>(null);
 
   useEffect(() => {
@@ -528,44 +604,10 @@ export default function PaymentStep({
     };
   }, [orderId]);
 
-  const appointmentAtIso = search?.get("appointment_at") || null;
-  const appointmentAtPretty = useMemo(() => {
-    if (!appointmentAtIso) return null;
-    const d = new Date(appointmentAtIso);
-    if (isNaN(d.getTime())) return null;
-    return d.toLocaleString("en-GB", {
-      weekday: "short",
-      day: "2-digit",
-      month: "short",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }, [appointmentAtIso]);
+  const paymentRef = useMemo(() => {
+    return orderReference || orderId || "ORDER";
+  }, [orderReference, orderId]);
 
-  // ---- Cart totals ----
-  const lines = (items || []) as CartItem[];
-  const totals: CartTotals = useMemo(() => computeCartTotals(lines), [lines]);
-
-  const fmt = (minor: number) => formatMinorGBP(minor);
-  const totalDisplay = useMemo(
-    () => fmt(totals.totalMinor),
-    [totals.totalMinor]
-  );
-
-  // ---- Reference code from slug ----
-  const refCode = useMemo(
-    () => makeRefFromSlug(effectiveSlug),
-    [effectiveSlug]
-  );
-
-  // ---- Payment reference (no orderRef; just orderId or refCode) ----
-  const paymentRef = useMemo(
-    () => orderReference || refCode,
-    [orderReference, refCode]
-  );
-
-  // ---- last_payment payload builder ----
   const buildLastPayment = () =>
     buildLastPaymentPayload(
       paymentRef,
@@ -574,21 +616,24 @@ export default function PaymentStep({
       appointmentAtIso
     );
 
-  // -----------------------
-  // Tell backend: this order is still pending (for this step)
-  // -----------------------
-  useEffect(() => {
-    if (!orderId) return;
-    (async () => {
-      try {
-        await markOrderPaidApi(orderId, {
-          payment_status: "pending",
-        } as any);
-      } catch {
-        // ignore; order was probably already pending
-      }
-    })();
-  }, [orderId]);
+    const ensureInFlightRef = useRef<Promise<string> | null>(null);
+const ensuredKeyRef = useRef<string | null>(null);
+
+const cartKey = useMemo(() => {
+  // stable signature so effect only re-runs when cart meaningfully changes
+  return JSON.stringify(
+    (lines || []).map((i) => ({
+      sku: i.sku,
+      qty: i.qty,
+      label: (i as any).label ?? null,
+    }))
+  );
+}, [lines]);
+
+const ensureKey = useMemo(() => {
+  return `${effectiveSlug || ""}::${appointmentAtIso || ""}::${cartKey}`;
+}, [effectiveSlug, appointmentAtIso, cartKey]);
+
 
   // -----------------------
   // Test success (no real charge)
@@ -596,56 +641,45 @@ export default function PaymentStep({
   const [testSubmitting, setTestSubmitting] = useState(false);
 
   const onTestSuccess = async () => {
-    if (testSubmitting) return; // prevent double-click locally
+    if (testSubmitting) return;
+    if (!orderId) {
+      setOrderInitError(
+        "Order not ready yet. Please wait a moment and try again."
+      );
+      return;
+    }
+
     setTestSubmitting(true);
 
     const payload = buildLastPayment();
     persistLastPayment(payload);
 
-    // ✅ update the order's payment_status via updateOrderApi
-    if (orderId) {
-      try {
-        await updateOrderApi(orderId, {
-          payment_status: "paid",
-        } as any);
-      } catch {
-        // ignore failures here; we still redirect
-      }
-    }
+    try {
+      await updateOrderApi(orderId, { payment_status: "paid" } as any);
+    } catch {}
 
-    // ✅ always try to send invoice email (uses fallback if orderId null)
-    await sendInvoiceEmailForOrder(orderId || null, payload, effectiveSlug);
+    await sendInvoiceEmailForOrder(orderId, payload, effectiveSlug);
 
-    // NOTE: intentionally NOT clearing the cart here,
-    // so you can still show the success page again for testing.
-
-    // let the success step know it should send user to home (not first step)
     if (typeof window !== "undefined") {
       try {
         window.localStorage.setItem("after_success_redirect", "home");
-      } catch {
-        // ignore
-      }
+      } catch {}
     }
 
-    // If we are inside multi-step flow, just go to success step
     if (goToSuccessStep) {
       goToSuccessStep();
       setTestSubmitting(false);
       return;
     }
 
-    // Fallback: navigate to success route
     if (typeof window !== "undefined") {
       const base = `/private-services/${effectiveSlug}/book`;
       const u = new URL(base, window.location.origin);
       u.searchParams.set("step", "success");
       u.searchParams.set("order", orderId || payload.ref);
       u.searchParams.set("slug", effectiveSlug);
-      if (appointmentAtIso) {
+      if (appointmentAtIso)
         u.searchParams.set("appointment_at", appointmentAtIso);
-      }
-
       router.push(u.pathname + u.search + u.hash);
     }
 
@@ -653,7 +687,7 @@ export default function PaymentStep({
   };
 
   // =========================
-  // Embedded Ryft (Apple/Google Pay + Cards)
+  // Embedded Ryft
   // =========================
   const [error, setError] = useState<string | null>(null);
   const [initialising, setInitialising] = useState(false);
@@ -662,7 +696,6 @@ export default function PaymentStep({
   const [sdkReady, setSdkReady] = useState(false);
   const [showPay, setShowPay] = useState(false);
 
-  // Reveal payment form + scroll
   const revealPay = () => {
     setShowPay(true);
     setTimeout(() => {
@@ -673,13 +706,10 @@ export default function PaymentStep({
           "ryft-pay-btn"
         ) as HTMLButtonElement | null;
         btn?.focus();
-      } catch {
-        // ignore
-      }
+      } catch {}
     }, 0);
   };
 
-  // ---- Setup Ryft when user reveals Pay and there is something to pay ----
   useEffect(() => {
     let cancelled = false;
 
@@ -703,9 +733,7 @@ export default function PaymentStep({
 
         const Ryft: any = (window as any).Ryft;
         const publicKey = process.env.NEXT_PUBLIC_RYFT_PUBLIC_KEY;
-        if (!publicKey) {
-          throw new Error("Missing NEXT_PUBLIC_RYFT_PUBLIC_KEY");
-        }
+        if (!publicKey) throw new Error("Missing NEXT_PUBLIC_RYFT_PUBLIC_KEY");
 
         Ryft.init({
           publicKey,
@@ -720,9 +748,7 @@ export default function PaymentStep({
             merchantCountryCode: "GB",
           },
           fieldCollection: {
-            billingAddress: {
-              display: "full",
-            },
+            billingAddress: { display: "full" },
           },
           style: {
             borderRadius: 8,
@@ -741,19 +767,13 @@ export default function PaymentStep({
 
         setSdkReady(true);
       } catch (e: any) {
-        if (!cancelled) {
-          setError(e?.message || "Failed to initialise payments");
-        }
+        if (!cancelled) setError(e?.message || "Failed to initialise payments");
       } finally {
-        if (!cancelled) {
-          setInitialising(false);
-        }
+        if (!cancelled) setInitialising(false);
       }
     }
 
-    if (totals.totalMinor > 0 && showPay) {
-      setupRyft();
-    }
+    if (totals.totalMinor > 0 && showPay) setupRyft();
 
     return () => {
       cancelled = true;
@@ -792,15 +812,14 @@ export default function PaymentStep({
         strategy="afterInteractive"
       />
 
-      {/* Top header */}
       <header className="flex flex-col gap-4 border-b border-slate-200 pb-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="mt-1 text-2xl font-semibold text-slate-900">
             Payment
           </h2>
           <p className="mt-1 text-xs sm:text-sm text-slate-500">
-            Securely complete your booking. We’ll email your receipt and
-            invoice as soon as the payment is confirmed.
+            Securely complete your booking. We’ll email your receipt and invoice
+            as soon as the payment is confirmed.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2 text-right">
@@ -813,6 +832,12 @@ export default function PaymentStep({
         </div>
       </header>
 
+      {orderInitError ? (
+        <div className="mt-4 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+          {orderInitError}
+        </div>
+      ) : null}
+
       {appointmentAtPretty ? (
         <div className="mt-4 inline-flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50/80 px-3 py-2 text-xs sm:text-sm text-emerald-900">
           <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
@@ -821,9 +846,7 @@ export default function PaymentStep({
         </div>
       ) : null}
 
-      {/* Main layout */}
       <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
-        {/* Order summary */}
         <section className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4 sm:p-5">
           <div className="flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-slate-900">
@@ -863,7 +886,6 @@ export default function PaymentStep({
           </div>
         </section>
 
-        {/* Payment column */}
         <section className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-5">
           <h3 className="text-sm font-semibold text-slate-900">Payment</h3>
           <p className="mt-1 text-xs text-slate-500">
@@ -878,15 +900,14 @@ export default function PaymentStep({
             </span>
           </div>
 
-          {/* Buttons */}
           <div className="mt-4 flex flex-col gap-3">
             <button
               type="button"
               onClick={revealPay}
-              disabled={initialising}
+              disabled={initialising || !orderId}
               className={`inline-flex items-center justify-center rounded-full px-6 py-2.5 text-sm font-medium text-white shadow-sm transition ${
-                initialising
-                  ? "cursor-wait bg-slate-400"
+                initialising || !orderId
+                  ? "cursor-not-allowed bg-slate-400"
                   : "bg-slate-900 hover:bg-black"
               }`}
             >
@@ -896,7 +917,7 @@ export default function PaymentStep({
             <button
               type="button"
               onClick={onTestSuccess}
-              disabled={testSubmitting}
+              disabled={testSubmitting || !orderId}
               className="inline-flex items-center justify-center rounded-full bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 disabled:opacity-60"
             >
               {testSubmitting ? "Payment Successful" : "Test success"}
@@ -910,7 +931,6 @@ export default function PaymentStep({
             </Link>
           </div>
 
-          {/* Embedded Ryft form */}
           {showPay && (
             <div className="mt-5 space-y-3 rounded-2xl border border-slate-200 bg-slate-50/80 p-3 sm:p-4">
               {error && (
@@ -929,6 +949,10 @@ export default function PaymentStep({
                     setError("Payments not ready yet");
                     return;
                   }
+                  if (!orderId) {
+                    setError("Order not ready yet");
+                    return;
+                  }
 
                   try {
                     const paymentSession = await Ryft.attemptPayment({
@@ -942,71 +966,55 @@ export default function PaymentStep({
                       const payload = buildLastPayment();
                       persistLastPayment(payload);
 
-                      // Mark order as paid (if we know it)
-                      if (orderId) {
-                        try {
-                          await markOrderPaidApi(orderId, {
-                            payment_status: "paid",
-                            payment_reference:
-                              paymentSession?.id ||
-                              paymentSession?.reference ||
-                              payload.ref,
-                            amountMinor: payload.amountMinor,
-                            provider: "ryft",
-                            raw: paymentSession,
-                          } as any);
-                        } catch {
-                          // ignore
-                        }
-                      }
+                      try {
+                        await markOrderPaidApi(orderId, {
+                          payment_status: "paid",
+                          payment_reference:
+                            paymentSession?.id ||
+                            paymentSession?.reference ||
+                            payload.ref,
+                          amountMinor: payload.amountMinor,
+                          provider: "ryft",
+                          raw: paymentSession,
+                        } as any);
+                      } catch {}
 
-                      // ✅ always try to send invoice email (will fallback)
                       await sendInvoiceEmailForOrder(
-                        orderId || null,
+                        orderId,
                         payload,
                         effectiveSlug
                       );
 
-                      // In real payment flow we still clear the cart
                       try {
                         clearCart?.();
-                      } catch {
-                        // ignore
-                      }
+                      } catch {}
 
-                      // same redirect behaviour flag as test success
                       if (typeof window !== "undefined") {
                         try {
                           window.localStorage.setItem(
                             "after_success_redirect",
                             "home"
                           );
-                        } catch {
-                          // ignore
-                        }
+                        } catch {}
                       }
 
-                      // If used inside the multi-step flow, go straight to success step
                       if (goToSuccessStep) {
                         goToSuccessStep();
                         return;
                       }
 
-                      // Fallback: full redirect to success route
                       if (typeof window !== "undefined") {
                         const base = `/private-services/${effectiveSlug}/book`;
                         const u = new URL(base, window.location.origin);
                         u.searchParams.set("step", "success");
                         u.searchParams.set("order", orderId || payload.ref);
                         u.searchParams.set("slug", effectiveSlug);
-                        if (appointmentAtIso) {
+                        if (appointmentAtIso)
                           u.searchParams.set(
                             "appointment_at",
                             appointmentAtIso
                           );
-                        }
-                        window.location.href =
-                          u.pathname + u.search + u.hash;
+                        window.location.href = u.pathname + u.search + u.hash;
                       }
                       return;
                     }
@@ -1030,15 +1038,21 @@ export default function PaymentStep({
                   id="ryft-pay-btn"
                   type="submit"
                   disabled={
-                    !sdkReady || !clientSecret || !cardValid || initialising
+                    !sdkReady ||
+                    !clientSecret ||
+                    !cardValid ||
+                    initialising ||
+                    !orderId
                   }
                   className="w-full justify-center rounded-full bg-slate-900 px-4 py-3 text-sm font-medium text-white disabled:opacity-50"
                 >
                   {initialising ? "Loading payment…" : `Pay ${totalDisplay}`}
                 </button>
+
                 <div id="ryft-pay-error" className="text-xs text-rose-600">
                   {error}
                 </div>
+
                 <p className="text-[11px] text-slate-500">
                   Apple Pay / Google Pay buttons will appear automatically on
                   compatible devices.

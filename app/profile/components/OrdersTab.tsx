@@ -96,20 +96,49 @@ export default function OrdersTab() {
                 ? order.meta.lines[0]
                 : null;
 
-            const appointmentBooked = Boolean(order.is_appointment_booked);
+            // ---------------- FIX STARTS HERE ----------------
 
-            // Prefer order.start_at, fall back to meta.appointment_start_at
+            // 1) Try multiple possible start fields (backend often varies)
             const appointmentStartRaw: string | null =
-              order.start_at ||
-              (order.meta?.appointment_start_at as string | undefined) ||
+              (order.start_at as any) ||
+              (order as any).startAt ||
+              (order as any).appointment_start_at ||
+              (order.meta?.appointment_start_at as any) ||
+              (order.meta as any)?.appointmentStartAt ||
+              (order.meta as any)?.appointment_at ||
+              (order.meta as any)?.appointmentAt ||
               null;
 
-            const appointmentLabel =
-              appointmentBooked && appointmentStartRaw
-                ? formatDateTime(appointmentStartRaw)
-                : appointmentBooked
-                ? "Appointment booked"
-                : "Not yet booked";
+            const hasAppointmentTime = Boolean(
+              appointmentStartRaw && String(appointmentStartRaw).trim()
+            );
+
+            // 2) Use status fields if present
+            const rawApptStatus =
+              (order.appointment_status as any) ||
+              (order.meta as any)?.appointment_status ||
+              "";
+            const apptStatus = String(rawApptStatus).toLowerCase().trim();
+
+            // 3) Robust booked detection:
+            // - backend flag
+            // - OR we have a start time
+            // - OR status indicates booked/confirmed/etc.
+            const appointmentBooked =
+              Boolean(order.is_appointment_booked) ||
+              hasAppointmentTime ||
+              ["booked", "confirmed", "scheduled", "complete", "completed"].includes(
+                apptStatus
+              );
+
+            // 4) Label: show time if we have it; otherwise show booked/not booked
+            const appointmentLabel = hasAppointmentTime
+              ? formatDateTime(String(appointmentStartRaw))
+              : appointmentBooked
+              ? "Appointment booked"
+              : "Not yet booked";
+
+            // ---------------- FIX ENDS HERE ----------------
 
             return (
               <div
@@ -162,9 +191,7 @@ export default function OrdersTab() {
 
                   <div className="flex items-center gap-3">
                     <span className="hidden text-[11px] text-slate-500 sm:inline">
-                      {appointmentBooked && appointmentStartRaw
-                        ? appointmentLabel
-                        : "No appointment booked"}
+                      {appointmentBooked ? appointmentLabel : "No appointment booked"}
                     </span>
                     <ChevronDown
                       className={`h-4 w-4 text-slate-500 transition-transform ${
@@ -185,7 +212,6 @@ export default function OrdersTab() {
                           <span>Items in this order</span>
                         </div>
 
-                        {/* 👇 inline-block so the UL only gets as wide as its content */}
                         <ul className="space-y-1.5 inline-block">
                           {(order.meta?.lines || []).map((line) => (
                             <li
@@ -216,9 +242,7 @@ export default function OrdersTab() {
                             <CalendarIcon className="h-3.5 w-3.5 text-slate-400" />
                             <span>
                               Appointment:{" "}
-                              {appointmentBooked && appointmentStartRaw
-                                ? appointmentLabel
-                                : "Not yet booked"}
+                              {appointmentBooked ? appointmentLabel : "Not yet booked"}
                             </span>
                           </p>
                           <p className="flex items-center gap-1.5">

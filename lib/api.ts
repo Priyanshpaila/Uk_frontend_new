@@ -886,6 +886,7 @@ export async function fetchServiceBySlug(slug: string): Promise<ServiceDetail> {
     status: raw.status ?? "published",
     active: raw.active ?? true,
     view_type: raw.view_type ?? "card",
+    appointment_medium:raw.appointment_medium ?? null,
 
     // backend snake_case
     booking_flow: raw.booking_flow ?? null,
@@ -1105,7 +1106,6 @@ export async function fetchClinicFormByIdApi(formId: string) {
 
   throw lastErr || new Error("Failed to fetch clinic form by id.");
 }
-
 
 /* ------------------------------------------------------------------ */
 /*                  Consultation session + RAF answers                */
@@ -2109,13 +2109,15 @@ export async function postPendingOrderOnce(
  */
 export async function fetchOrderByReferenceApi(ref: string): Promise<any> {
   const base = getBackendBase(); // includes /api
-  const url = `${base}/account/orders/by-ref/${encodeURIComponent(ref)}`;
+  const url = `${base}/orders?reference=${encodeURIComponent(ref)}`;
+
   const token =
     typeof window !== "undefined"
       ? window.localStorage.getItem("session_token") || ""
       : "";
 
   const res = await fetch(url, {
+    method: "GET",
     headers: {
       Accept: "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -2123,11 +2125,23 @@ export async function fetchOrderByReferenceApi(ref: string): Promise<any> {
     cache: "no-store",
   });
 
+  let json: any = null;
+  try {
+    json = await res.json();
+  } catch {}
+
   if (!res.ok) {
-    throw new Error(`Failed to fetch order ${ref}`);
+    const msg =
+      json?.message ||
+      json?.error ||
+      `Failed to fetch order by reference: ${ref} (HTTP ${res.status})`;
+    throw new Error(msg);
   }
 
-  return res.json();
+  // Handle common response shapes safely
+  if (Array.isArray(json)) return json[0] ?? null;
+  if (Array.isArray(json?.data)) return json.data[0] ?? null;
+  return json; // if backend returns a single object
 }
 
 /**
@@ -2167,6 +2181,18 @@ export type CreateAppointmentPayload = {
   host_url?: string; // optional
 };
 
+export type UpdateAppointmentPayload = Partial<{
+  order_id: string;
+  user_id: string;
+  service_id: string;
+  schedule_id: string;
+  start_at: string;
+  end_at: string;
+  join_url: string;
+  host_url: string;
+  status: string;
+  [key: string]: any;
+}>;
 export type AppointmentDto = {
   _id: string;
   order_id: string;
@@ -2231,6 +2257,24 @@ export async function createAppointmentApi(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+/**
+ * ✅ PUT /appointments/:id
+ * Use this to update join_url / host_url after Zoom meeting is created.
+ */
+export async function updateAppointmentApi(
+  appointmentId: string,
+  payload: UpdateAppointmentPayload
+): Promise<AppointmentDto> {
+  const base = getBackendBase();
+  return jsonFetch<AppointmentDto>(
+    `${base}/appointments/${encodeURIComponent(appointmentId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -2499,4 +2543,43 @@ export async function uploadPageImageApi(
     filename: data.filename,
     ...data,
   };
+}
+
+/* ------------------------------------------------------------------ */
+/*                               ZOOM                                 */
+/* ------------------------------------------------------------------ */
+
+export type CreateZoomMeetingPayload = {
+  topic: string;
+  start_time: string; // ISO, e.g. "2025-12-22T10:30:00Z"
+  duration: number; // minutes
+  timezone: string; // e.g. "Europe/London"
+  agenda?: string;
+};
+
+export type ZoomMeetingDto = {
+  id: number;
+  uuid: string;
+  topic: string;
+  start_time: string;
+  duration: number;
+  timezone: string;
+  join_url: string;
+  start_url: string;
+  password?: string;
+  [key: string]: any;
+};
+
+/**
+ * POST /zoom/meetings
+ * Creates a Zoom meeting via backend.
+ */
+export async function createZoomMeetingApi(
+  payload: CreateZoomMeetingPayload
+): Promise<ZoomMeetingDto> {
+  const base = getBackendBase(); // includes /api
+  return jsonFetch<ZoomMeetingDto>(`${base}/zoom/meetings`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }

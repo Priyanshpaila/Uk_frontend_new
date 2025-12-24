@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useCart, type CartItem } from "@/components/cart/cart-context";
+import { ensureDraftOrder } from "../booking-order";
+
 import {
   fetchScheduleForServiceSlug,
   buildSlotsForDate,
@@ -14,15 +16,17 @@ import {
   type DayMeta,
   persistAppointmentSelection,
   createAppointmentApi,
-  createOrderApi,
   updateOrderApi,
   resolveUserIdFromStorage,
   type CreateAppointmentPayload,
-  buildRafQAFromStorage,
   fetchBookedSlotsApi,
   type BookedSlotsResponse,
-  getLoggedInUserApi,
-  type LoggedInUser,
+  sendEmailApi,
+  getStoredUserFromStorage,
+  updateAppointmentApi,
+  createZoomMeetingApi,
+  type ZoomMeetingDto,
+  fetchServiceBySlug,
 } from "@/lib/api";
 
 /* ------------------------------------------------------------------ */
@@ -31,13 +35,70 @@ import {
 
 export type CalendarStepProps = {
   serviceSlug?: string;
-  autoContinue?: boolean; // kept for compatibility with parent
-  goToPaymentStep?: () => void; // called after successful booking
+  autoContinue?: boolean;
+  goToPaymentStep?: () => void;
 };
 
 /* ------------------------------------------------------------------ */
-/* Helpers                                                            */
+/* Utilities                                                           */
 /* ------------------------------------------------------------------ */
+
+const safeStorage = {
+  get(key: string): string {
+    if (typeof window === "undefined") return "";
+    try {
+      return window.localStorage.getItem(key) || "";
+    } catch {
+      return "";
+    }
+  },
+  set(key: string, value: string) {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(key, value);
+    } catch {}
+  },
+  setSession(key: string, value: string) {
+    if (typeof window === "undefined") return;
+    try {
+      window.sessionStorage.setItem(key, value);
+    } catch {}
+  },
+  setBoth(key: string, value: string) {
+    safeStorage.set(key, value);
+    safeStorage.setSession(key, value);
+  },
+};
+
+function safeJsonParse<T = any>(raw: string | null): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+function formatIsoInTimeZone(iso: string, tz: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(d);
+}
+
+function readIdFromLocal(keys: string[]): string | null {
+  if (typeof window === "undefined") return null;
+  for (const key of keys) {
+    try {
+      const v = window.localStorage.getItem(key);
+      if (v && v !== "undefined" && v !== "null") return v;
+    } catch {}
+  }
+  return null;
+}
 
 function resolveServiceId(
   schedule: Schedule | null,
@@ -46,7 +107,6 @@ function resolveServiceId(
   if (!schedule) return null;
 
   const sch: any = schedule;
-
   const fromSchedule =
     sch.service_id ||
     sch.serviceId ||
@@ -58,9 +118,10 @@ function resolveServiceId(
 
   for (const ci of cartItems as any[]) {
     const cid =
-      ci.service_id ||
-      ci.serviceId ||
-      (ci.service && (ci.service._id || ci.service.id)) ||
+      (ci as any).service_id ||
+      (ci as any).serviceId ||
+      ((ci as any).service &&
+        ((ci as any).service._id || (ci as any).service.id)) ||
       null;
     if (cid) return String(cid);
   }
@@ -68,247 +129,186 @@ function resolveServiceId(
   return null;
 }
 
-function readCookie(name: string): string | null {
-  if (typeof document === "undefined") return null;
-  const pairs = document.cookie.split("; ");
-  for (const pair of pairs) {
-    const eq = pair.indexOf("=");
-    if (eq === -1) continue;
-    const key = decodeURIComponent(pair.slice(0, eq));
-    if (key === name) {
-      return decodeURIComponent(pair.slice(eq + 1));
-    }
-  }
-  return null;
-}
+function formatForEmail(iso: string, tz: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
 
-function getConsultationSessionId(): number | null {
-  if (typeof window === "undefined") return null;
-  const keys = [
-    "consultation_session_id",
-    "pe_consultation_session_id",
-    "consultationSessionId",
-  ];
-  for (const k of keys) {
-    try {
-      const raw =
-        localStorage.getItem(k) ||
-        sessionStorage.getItem(k) ||
-        readCookie(k) ||
-        null;
-      const n = raw ? Number(raw) : NaN;
-      if (Number.isFinite(n) && n > 0) return n;
-    } catch {}
-  }
-  return null;
-}
-
-/** Read an ID from localStorage using a list of possible keys */
-function readIdFromLocal(keys: string[]): string | null {
-  if (typeof window === "undefined") return null;
-  for (const key of keys) {
-    try {
-      const v = window.localStorage.getItem(key);
-      if (v && v !== "undefined" && v !== "null") {
-        return v;
-      }
-    } catch {}
-  }
-  return null;
-}
-
-function readRafFormId(slug: string): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const key = `raf_form_id.${slug}`;
-    const v = localStorage.getItem(key);
-    if (v && v !== "undefined" && v !== "null") {
-      return v;
-    }
-  } catch {}
-  return null;
-}
-
-function minorToMajor(minor: number): number {
-  const n = Number(minor || 0);
-  return Math.round((n / 100) * 100) / 100;
-}
-
-function resolveShippingFromUser(user: LoggedInUser | null) {
-  const u: any = user || {};
-  const shipLine1 =
-    (u.shipping_address_line1 || u.shippingAddressLine1 || "").trim();
-  const shipCity = (u.shipping_city || u.shippingCity || "").trim();
-  const shipPost = (u.shipping_postalcode || u.shippingPostalcode || "").trim();
-
-  const hasShipping =
-    !!shipLine1 || !!shipCity || !!shipPost || !!u.shipping_country;
-
-  const shipping = {
-    shipping_address_line1: hasShipping
-      ? shipLine1
-      : (u.address_line1 || "").trim(),
-    shipping_address_line2: hasShipping
-      ? (u.shipping_address_line2 || u.shippingAddressLine2 || "").trim()
-      : (u.address_line2 || "").trim(),
-    shipping_city: hasShipping
-      ? (u.shipping_city || u.shippingCity || "").trim()
-      : (u.city || "").trim(),
-    shipping_county: hasShipping
-      ? (u.shipping_county || u.shippingCounty || "").trim()
-      : (u.county || "").trim(),
-    shipping_postalcode: hasShipping
-      ? (u.shipping_postalcode || u.shippingPostalcode || "").trim()
-      : (u.postalcode || "").trim(),
-    shipping_country: hasShipping
-      ? (u.shipping_country || u.shippingCountry || "").trim()
-      : (u.country || "UK").trim(),
-    shipping_is_different: hasShipping,
-  };
-
-  return shipping;
-}
-
-function buildOrderMeta(opts: {
-  cartItems: any[];
-  serviceSlug: string;
-  serviceName?: string;
-  appointmentIso: string;
-  user?: LoggedInUser | null;
-  currency?: string;
-}) {
-  const currency = (opts.currency || "GBP").toUpperCase();
-
-  const items = (opts.cartItems || []).map((ci: any) => {
-    const qty = Math.max(1, Number(ci.qty || 1));
-
-    const unitMinor =
-      typeof ci.unitMinor === "number"
-        ? ci.unitMinor
-        : typeof ci.priceMinor === "number"
-        ? ci.priceMinor
-        : ci.price
-        ? Math.round(Number(ci.price) * 100)
-        : 0;
-
-    const totalMinor =
-      typeof ci.totalMinor === "number" ? ci.totalMinor : unitMinor * qty;
-
-    const price = minorToMajor(unitMinor);
-    const line_total = minorToMajor(totalMinor);
-
-    const variation =
-      ci.variation ||
-      ci.variations ||
-      ci.optionLabel ||
-      ci.selectedLabel ||
-      ci.label ||
-      "";
-
-    return {
-      sku: ci.sku || undefined,
-      name: ci.name,
-      variations: variation || null,
-      strength: ci.strength ?? null,
-      qty,
-      unitMinor,
-      totalMinor,
-      price,
-      line_total,
-      variation: variation || null,
-    };
-  });
-
-  const lines = items.map((it: any, index: number) => ({
-    index,
-    name: it.name,
-    qty: it.qty,
-    variation: it.variation || it.variations || null,
-
-    // ✅ add pricing on each line (minor + major)
-    unitMinor: it.unitMinor,
-    totalMinor: it.totalMinor,
-    price: it.price,
-    line_total: it.line_total,
-
-    sku: it.sku,
-  }));
-
-  const subtotalMinor = items.reduce(
-    (sum: number, it: any) => sum + (it.totalMinor || 0),
-    0
-  );
-  const feesMinor = 0;
-  const totalMinor = subtotalMinor + feesMinor;
-
-  const subtotal = minorToMajor(subtotalMinor);
-  const fees = minorToMajor(feesMinor);
-  const total = minorToMajor(totalMinor);
-
-  const sessionId = getConsultationSessionId();
-  const rafQA = buildRafQAFromStorage(opts.serviceSlug);
-  const rafFormId = readRafFormId(opts.serviceSlug);
-
-  const shipping = resolveShippingFromUser(opts.user ?? null);
-
-  const meta: any = {
-    type: "new",
-
-    // ✅ pricing (canonical minor + ready-to-display major)
-    lines,
-    items,
-    subtotalMinor,
-    feesMinor,
-    totalMinor,
-    subtotal,
-    fees,
-    total,
-    currency,
-
-    // ✅ order context
-    service_slug: opts.serviceSlug,
-    service: opts.serviceName || opts.serviceSlug,
-    appointment_start_at: opts.appointmentIso,
-    consultation_session_id: sessionId ?? undefined,
-    payment_status: "pending",
-
-    // ✅ shipping address snapshot on order
-    ...shipping,
-
-    formsQA: {
-      raf: {
-        form_id: rafFormId || null,
-        schema_version: null,
-        qa: rafQA,
-      },
-    },
-  };
-
-  if (items[0]) {
-    const first = items[0];
-    meta.selectedProduct = {
-      name: first.name,
-      variation: first.variation || first.variations || null,
-      strength: first.strength || first.variation || null,
-      qty: first.qty,
-      unitMinor: first.unitMinor,
-      totalMinor: first.totalMinor,
-      price: first.price,
-      line_total: first.line_total,
-      currency,
-    };
-  }
-
-  return meta;
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    weekday: "short",
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(d);
 }
 
 /* ------------------------------------------------------------------ */
-/* Calendar component                                                 */
+/* Service resolution (robust)                                         */
+/* ------------------------------------------------------------------ */
+
+type ServiceLite = {
+  _id?: string;
+  id?: string;
+  slug?: string;
+  name?: string;
+  appointment_medium?: string;
+  appointmentMedium?: string;
+  [k: string]: any;
+};
+
+function resolveServiceFromLocal(slug: string): ServiceLite | null {
+  if (typeof window === "undefined") return null;
+
+  const keys = [
+    `service.${slug}`,
+    "service",
+    "selected_service",
+    "pe_service",
+    "service_cache",
+  ];
+
+  for (const k of keys) {
+    try {
+      const raw = window.localStorage.getItem(k) || "";
+      if (!raw) continue;
+
+      const parsed: any = JSON.parse(raw);
+      const svc: any = parsed?.service || parsed;
+
+      const svcSlug = String(svc?.slug || "").trim();
+      if (svcSlug && slug && svcSlug !== slug) continue;
+
+      if (svc && typeof svc === "object") return svc as ServiceLite;
+    } catch {}
+  }
+
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Customer identity (email)                                           */
+/* ------------------------------------------------------------------ */
+
+function resolveCustomerFromStorage(): { email: string; name: string } {
+  if (typeof window === "undefined") return { email: "", name: "" };
+
+  try {
+    const u: any =
+      typeof getStoredUserFromStorage === "function"
+        ? getStoredUserFromStorage()
+        : null;
+
+    const email =
+      u?.email || u?.user?.email || u?.username || u?.user?.username || "";
+
+    const name =
+      `${u?.firstName || u?.user?.firstName || ""} ${
+        u?.lastName || u?.user?.lastName || ""
+      }`.trim() ||
+      u?.fullName ||
+      u?.user?.fullName ||
+      u?.name ||
+      u?.user?.name ||
+      "";
+
+    if (email) return { email: String(email), name: String(name || "Customer") };
+  } catch {}
+
+  const candidates = ["pharmacy_user", "user", "pe_user", "auth_user"];
+  for (const k of candidates) {
+    try {
+      const raw = window.localStorage.getItem(k) || "";
+      if (!raw) continue;
+      const parsed: any = JSON.parse(raw);
+      const u = parsed?.user || parsed;
+
+      const email =
+        u?.email ||
+        u?.username ||
+        (typeof u?.contact === "object" ? u.contact?.email : "") ||
+        "";
+
+      const name =
+        `${u?.firstName || u?.first_name || ""} ${
+          u?.lastName || u?.last_name || ""
+        }`.trim() ||
+        u?.fullName ||
+        u?.full_name ||
+        u?.name ||
+        "";
+
+      if (email) return { email: String(email), name: String(name || "Customer") };
+    } catch {}
+  }
+
+  return { email: "", name: "" };
+}
+
+/* ------------------------------------------------------------------ */
+/* Zoom helpers (robust extraction)                                    */
+/* ------------------------------------------------------------------ */
+
+type ZoomMeeting = ZoomMeetingDto;
+
+function pickJoinUrl(m: any) {
+  const x =
+    m?.join_url ||
+    m?.joinUrl ||
+    m?.joinURL ||
+    m?.data?.join_url ||
+    m?.data?.joinUrl ||
+    m?.data?.joinURL ||
+    "";
+  return String(x || "").trim();
+}
+
+function pickMeetingId(m: any) {
+  const x =
+    m?.id ??
+    m?.meeting_id ??
+    m?.meetingId ??
+    m?.data?.id ??
+    m?.data?.meeting_id ??
+    m?.data?.meetingId ??
+    "";
+  return String(x ?? "").trim();
+}
+
+function pickPasscode(m: any) {
+  const x =
+    m?.password ||
+    m?.passcode ||
+    m?.zoomPasscode ||
+    m?.data?.password ||
+    m?.data?.passcode ||
+    m?.data?.zoomPasscode ||
+    "";
+  return String(x || "").trim();
+}
+
+function pickHostUrl(m: any) {
+  const x =
+    m?.start_url ||
+    m?.startUrl ||
+    m?.host_url ||
+    m?.hostUrl ||
+    m?.data?.start_url ||
+    m?.data?.startUrl ||
+    m?.data?.host_url ||
+    m?.data?.hostUrl ||
+    "";
+  return String(x || "").trim();
+}
+
+/* ------------------------------------------------------------------ */
+/* Component                                                           */
 /* ------------------------------------------------------------------ */
 
 export default function CalendarStep({
   serviceSlug,
-  autoContinue, // not used currently, but kept for compatibility
+  autoContinue,
   goToPaymentStep,
 }: CalendarStepProps) {
   const params = useParams<{ slug: string }>();
@@ -316,17 +316,22 @@ export default function CalendarStep({
 
   const router = useRouter();
   const cart = useCart();
-  const cartItems: CartItem[] = Array.isArray((cart as any)?.items)
-    ? (cart as any).items
-    : Array.isArray((cart as any)?.state?.items)
-    ? (cart as any).state.items
-    : [];
+
+  const cartItems: CartItem[] = useMemo(() => {
+    return Array.isArray((cart as any)?.items)
+      ? (cart as any).items
+      : Array.isArray((cart as any)?.state?.items)
+      ? (cart as any).state.items
+      : [];
+  }, [cart]);
 
   const [date, setDate] = useState<string>(() => dateToYmd(new Date()));
   const [slots, setSlots] = useState<Slot[]>([]);
   const [selectedIso, setSelectedIso] = useState<string | null>(null);
 
   const [schedule, setSchedule] = useState<Schedule | null>(null);
+  const [service, setService] = useState<ServiceLite | null>(null);
+
   const [dayMeta, setDayMeta] = useState<DayMeta | null>(null);
   const [scheduleId, setScheduleId] = useState<string | null>(null);
 
@@ -335,33 +340,65 @@ export default function CalendarStep({
 
   const [creatingAppointment, setCreatingAppointment] = useState(false);
   const [appointmentError, setAppointmentError] = useState<string | null>(null);
-
-  // success message + duplicate guard
-  const [appointmentSuccess, setAppointmentSuccess] = useState<string | null>(
-    null
-  );
+  const [appointmentSuccess, setAppointmentSuccess] = useState<string | null>(null);
   const [hasCreatedAppointment, setHasCreatedAppointment] = useState(false);
 
-  // booked slots from backend for selected date
-  const [bookedSlots, setBookedSlots] = useState<BookedSlotsResponse | null>(
-    null
-  );
+  const [bookedSlots, setBookedSlots] = useState<BookedSlotsResponse | null>(null);
+
+  const [emailError, setEmailError] = useState<string | null>(null);
+  const [emailStatus, setEmailStatus] = useState<"idle" | "sending" | "sent" | "failed">("idle");
 
   const minDate = useMemo(() => dateToYmd(new Date()), []);
   const maxDate = useMemo(() => dateToYmd(addDaysUtc(new Date(), 180)), []);
 
-  const handleDateChange = (e: any) => {
-    let value = e.target.value as string;
-    if (!value) return;
+  const atStart = date <= minDate;
 
-    if (value < minDate) value = minDate;
-    if (value > maxDate) value = maxDate;
+  const scheduleTimezone = useMemo(() => {
+    const tz = String((schedule as any)?.timezone || "").trim();
+    return tz || "Europe/London";
+  }, [schedule]);
 
-    setDate(value);
-  };
+  const slotMinutes = useMemo(
+    () => Number((schedule as any)?.slot_minutes || 15),
+    [schedule]
+  );
 
-  // Build a service-specific view of the schedule so that overrides
-  // only apply to this service (by slug / service_id)
+  const serviceName = useMemo(() => {
+    return (
+      (service?.name ? String(service.name) : "") ||
+      String((schedule as any)?.service?.name || "") ||
+      ""
+    );
+  }, [service, schedule]);
+
+  // ✅ medium detection (uses your service field)
+  const appointmentMedium = useMemo(() => {
+    const raw =
+      service?.appointment_medium ||
+      service?.appointmentMedium ||
+      (schedule as any)?.service?.appointment_medium ||
+      (schedule as any)?.service?.appointmentMedium ||
+      (schedule as any)?.appointment_medium ||
+      (schedule as any)?.appointmentMedium ||
+      safeStorage.get(`appointment_medium.${slug}`) ||
+      safeStorage.get("appointment_medium") ||
+      "";
+
+    return String(raw).toLowerCase().trim();
+  }, [service, schedule, slug]);
+
+  const isOnlineMedium = useMemo(() => {
+    const v = appointmentMedium;
+    return v === "online" || v.includes("online") || v.includes("zoom") || v.includes("video");
+  }, [appointmentMedium]);
+
+  useEffect(() => {
+    if (!appointmentMedium) return;
+    safeStorage.setBoth("appointment_medium", appointmentMedium);
+    safeStorage.setBoth(`appointment_medium.${slug}`, appointmentMedium);
+  }, [appointmentMedium, slug]);
+
+  // Filter schedule overrides to only this service
   const effectiveSchedule: Schedule | null = useMemo(() => {
     if (!schedule) return null;
 
@@ -369,9 +406,7 @@ export default function CalendarStep({
     const currentServiceId = resolveServiceId(schedule, cartItems);
 
     const rawOverrides = Array.isArray(sch.overrides) ? sch.overrides : null;
-    if (!rawOverrides) {
-      return schedule;
-    }
+    if (!rawOverrides) return schedule;
 
     const filteredOverrides = rawOverrides.filter((ov: any) => {
       if (!ov || typeof ov !== "object") return false;
@@ -393,33 +428,225 @@ export default function CalendarStep({
       return true;
     });
 
-    if (!filteredOverrides.length) {
-      return { ...(schedule as any), overrides: [] } as Schedule;
-    }
-
     return { ...(schedule as any), overrides: filteredOverrides } as Schedule;
   }, [schedule, cartItems, slug]);
 
-  const handleSelect = (iso: string, label?: string) => {
-    setSelectedIso(iso);
-    setAppointmentError(null);
-    setAppointmentSuccess(null);
-    persistAppointmentSelection(iso, {
-      label,
-      serviceSlug: slug,
-    });
-  };
+  /* ------------------------------------------------------------------ */
+  /* Zoom (single-flight + cache)                                       */
+  /* ------------------------------------------------------------------ */
 
-  // Persist service slug for other flows
+  const zoomLocksRef = useRef<Map<string, Promise<ZoomMeeting | null>>>(new Map());
+  const [zoomCreating, setZoomCreating] = useState(false);
+  const [zoomError, setZoomError] = useState<string | null>(null);
+
+  const [zoomPreview, setZoomPreview] = useState<{
+    iso: string;
+    joinUrl: string;
+    meetingId: string;
+    passcode: string;
+  } | null>(null);
+
+  const zoomStorageKey = useCallback(
+    (iso: string) => `zoom_meeting.${slug}.${iso}`,
+    [slug]
+  );
+
+  const readZoomMeetingFromStorage = useCallback(
+    (iso: string): ZoomMeeting | null => {
+      if (typeof window === "undefined") return null;
+      try {
+        const raw = window.localStorage.getItem(zoomStorageKey(iso));
+        return safeJsonParse<ZoomMeeting>(raw);
+      } catch {
+        return null;
+      }
+    },
+    [zoomStorageKey]
+  );
+
+  const writeZoomMeetingToStorage = useCallback(
+    (iso: string, meeting: ZoomMeeting) => {
+      if (typeof window === "undefined") return;
+      try {
+        window.localStorage.setItem(zoomStorageKey(iso), JSON.stringify(meeting));
+      } catch {}
+    },
+    [zoomStorageKey]
+  );
+
+  const ensureZoomMeetingForIso = useCallback(
+    (iso: string): Promise<ZoomMeeting | null> => {
+      if (!isOnlineMedium) return Promise.resolve(null);
+
+      const lockKey = `${slug}::${iso}`;
+      const locks = zoomLocksRef.current;
+      if (locks.has(lockKey)) return locks.get(lockKey)!;
+
+      const p = (async () => {
+        const cached = readZoomMeetingFromStorage(iso);
+        if (cached && (pickJoinUrl(cached) || pickMeetingId(cached))) return cached;
+
+        const baseName = serviceName || "Consultation";
+        const topic = `${baseName} consultancy call`;
+
+        setZoomCreating(true);
+        setZoomError(null);
+
+        const meetingRaw: any = await createZoomMeetingApi({
+          topic,
+          start_time: iso,
+          duration: Number.isFinite(slotMinutes) ? slotMinutes : 15,
+          timezone: scheduleTimezone,
+          agenda: baseName,
+        });
+
+        const meeting: any = meetingRaw?.data ? meetingRaw.data : meetingRaw;
+
+        writeZoomMeetingToStorage(iso, meeting as any);
+        return meeting as any;
+      })()
+        .catch((e: any) => {
+          const msg = e?.message || "Failed to create Zoom meeting.";
+          setZoomError(msg);
+          return null;
+        })
+        .finally(() => {
+          locks.delete(lockKey);
+          setZoomCreating(false);
+        });
+
+      locks.set(lockKey, p);
+      return p;
+    },
+    [
+      isOnlineMedium,
+      slug,
+      readZoomMeetingFromStorage,
+      serviceName,
+      slotMinutes,
+      scheduleTimezone,
+      writeZoomMeetingToStorage,
+    ]
+  );
+
+  /* ------------------------------------------------------------------ */
+  /* Persist selection across tabs/reloads                               */
+  /* ------------------------------------------------------------------ */
+
+  const selectedIsoKey = useMemo(() => `selected_iso.${slug}`, [slug]);
+  const selectedLabelKey = useMemo(() => `selected_label.${slug}`, [slug]);
+
+  // restore selection on mount / slug change
   useEffect(() => {
     if (!slug) return;
-    try {
-      localStorage.setItem("service_slug", slug);
-      sessionStorage.setItem("service_slug", slug);
-    } catch {}
+    const savedIso = safeStorage.get(selectedIsoKey);
+    if (savedIso) setSelectedIso(savedIso);
+  }, [slug, selectedIsoKey]);
+
+  // cross-tab: if another tab changes selected slot, reflect it here
+  useEffect(() => {
+    if (!slug) return;
+
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key) return;
+      if (e.key === selectedIsoKey) {
+        const v = String(e.newValue || "").trim();
+        setSelectedIso(v || null);
+      }
+    };
+
+    const onVisibility = () => {
+      if (document.hidden) return;
+      const savedIso = safeStorage.get(selectedIsoKey);
+      if (savedIso) setSelectedIso(savedIso);
+    };
+
+    window.addEventListener("storage", onStorage);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [slug, selectedIsoKey]);
+
+  /* ------------------------------------------------------------------ */
+  /* Handlers                                                           */
+  /* ------------------------------------------------------------------ */
+
+  const handleDateChange = useCallback(
+    (e: any) => {
+      let value = (e?.target?.value || "") as string;
+      if (!value) return;
+
+      if (value < minDate) value = minDate;
+      if (value > maxDate) value = maxDate;
+
+      setDate(value);
+    },
+    [minDate, maxDate]
+  );
+
+  const shiftDay = useCallback(
+    (delta: number) => {
+      setDate((prev) => {
+        const d = new Date(prev + "T00:00:00");
+        d.setDate(d.getDate() + delta);
+        const next = dateToYmd(d);
+        if (next < minDate) return prev;
+        if (next > maxDate) return prev;
+        return next;
+      });
+    },
+    [minDate, maxDate]
+  );
+
+  // ✅ slot click: persist selection AND trigger zoom immediately (online)
+  const handleSelect = useCallback(
+    (iso: string, label?: string) => {
+      setSelectedIso(iso);
+      setAppointmentError(null);
+      setAppointmentSuccess(null);
+      setEmailError(null);
+      setEmailStatus("idle");
+      setZoomError(null);
+      setZoomPreview(null);
+
+      safeStorage.setBoth(selectedIsoKey, iso);
+      if (label) safeStorage.setBoth(selectedLabelKey, label);
+
+      persistAppointmentSelection(iso, { label, serviceSlug: slug });
+
+      if (isOnlineMedium) {
+        void (async () => {
+          const m = await ensureZoomMeetingForIso(iso);
+          const joinUrl = pickJoinUrl(m);
+          if (!joinUrl) {
+            setZoomError((prev) => prev || "Zoom meeting could not be created for this slot.");
+            return;
+          }
+          setZoomPreview({
+            iso,
+            joinUrl,
+            meetingId: pickMeetingId(m),
+            passcode: pickPasscode(m),
+          });
+        })();
+      }
+    },
+    [slug, isOnlineMedium, ensureZoomMeetingForIso, selectedIsoKey, selectedLabelKey]
+  );
+
+  /* ------------------------------------------------------------------ */
+  /* Effects                                                            */
+  /* ------------------------------------------------------------------ */
+
+  useEffect(() => {
+    if (!slug) return;
+    safeStorage.setBoth("service_slug", slug);
   }, [slug]);
 
-  // 1) Load schedule for this service slug
+  // Load schedule + service
   useEffect(() => {
     if (!slug) {
       setLoading(false);
@@ -429,49 +656,77 @@ export default function CalendarStep({
 
     let cancelled = false;
 
-    async function run() {
+    (async () => {
       try {
         setLoading(true);
         setError(null);
 
-        const sch = await fetchScheduleForServiceSlug(slug);
+        const localSvc = resolveServiceFromLocal(slug);
+        if (!cancelled && localSvc) setService(localSvc);
+
+        const [sch, svc] = await Promise.all([
+          fetchScheduleForServiceSlug(slug),
+          fetchServiceBySlug(slug),
+        ]);
+
         if (cancelled) return;
 
-        setSchedule(sch);
-        setScheduleId(sch._id || null);
+        // your APIs return plain objects, but we still defensively handle {data:...}
+        const schAny: any = (sch as any)?.data ? (sch as any).data : sch;
+        const svcAny: any = (svc as any)?.data ? (svc as any).data : svc;
+
+        setSchedule(schAny);
+        setScheduleId((schAny as any)?._id || null);
+
+        if (svcAny) setService(svcAny);
+
+        const sid = (schAny as any)?._id ? String((schAny as any)._id) : "";
+        if (sid) {
+          safeStorage.setBoth("schedule_id", sid);
+          safeStorage.setBoth(`schedule_id.${slug}`, sid);
+        }
       } catch (e: any) {
         if (cancelled) return;
         setError(e?.message || "Failed to load schedule.");
       } finally {
         if (!cancelled) setLoading(false);
       }
-    }
+    })();
 
-    run();
     return () => {
       cancelled = true;
     };
   }, [slug]);
 
-  // 2) Build base slots (opening hours) when *service-specific* schedule or date changes
+  // Build slots
   useEffect(() => {
     if (!effectiveSchedule) {
       setSlots([]);
       setDayMeta(null);
-      setSelectedIso(null);
+      setHasCreatedAppointment(false);
       return;
     }
 
     const { slots: built, meta } = buildSlotsForDate(effectiveSchedule, date);
     setSlots(built);
     setDayMeta(meta);
-    setSelectedIso(null);
+
     setAppointmentError(null);
     setAppointmentSuccess(null);
+    setEmailError(null);
+    setEmailStatus("idle");
+    setZoomError(null);
+
+    // keep selectedIso if it still exists in today's slots, else clear
+    setSelectedIso((prev) => {
+      if (!prev) return prev;
+      const exists = built.some((s) => s.start_at === prev);
+      return exists ? prev : null;
+    });
     setHasCreatedAppointment(false);
   }, [effectiveSchedule, date]);
 
-  // 3) Fetch booked slots for this schedule + date
+  // Fetch booked slots
   useEffect(() => {
     if (!scheduleId || !date) {
       setBookedSlots(null);
@@ -480,29 +735,24 @@ export default function CalendarStep({
 
     let cancelled = false;
 
-    async function run() {
+    (async () => {
       try {
         const data = await fetchBookedSlotsApi(String(scheduleId), date);
-        if (cancelled) return;
-        setBookedSlots(data);
+        if (!cancelled) setBookedSlots(data);
       } catch (err) {
         if (process.env.NODE_ENV !== "production") {
           console.error("Failed to load booked slots", err);
         }
-        if (!cancelled) {
-          setBookedSlots(null);
-        }
+        if (!cancelled) setBookedSlots(null);
       }
-    }
+    })();
 
-    run();
     return () => {
       cancelled = true;
     };
   }, [scheduleId, date]);
 
-  // Whenever user selects a slot, check if we've already created
-  // an appointment for this slug + datetime (stored in localStorage)
+  // Duplicate guard
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!slug || !selectedIso) {
@@ -511,38 +761,65 @@ export default function CalendarStep({
     }
     const key = `appointment_created.${slug}.${selectedIso}`;
     try {
-      const v = localStorage.getItem(key);
-      setHasCreatedAppointment(v === "1");
+      setHasCreatedAppointment(window.localStorage.getItem(key) === "1");
     } catch {
       setHasCreatedAppointment(false);
     }
   }, [slug, selectedIso]);
 
-  // ---- Calendar helpers ----
+  // ✅ If selectedIso exists and medium is online, ensure Zoom exists (tab refocus / service loads later)
+  useEffect(() => {
+    if (!selectedIso) return;
+    if (!isOnlineMedium) return;
 
-  function shiftDay(delta: number) {
-    setDate((prev) => {
-      const d = new Date(prev + "T00:00:00");
-      d.setDate(d.getDate() + delta);
-      const next = dateToYmd(d);
+    let cancelled = false;
 
-      if (next < minDate) return prev;
-      if (next > maxDate) return prev;
+    (async () => {
+      const cached = readZoomMeetingFromStorage(selectedIso);
+      const cachedJoin = pickJoinUrl(cached);
+      if (cachedJoin) {
+        setZoomPreview({
+          iso: selectedIso,
+          joinUrl: cachedJoin,
+          meetingId: pickMeetingId(cached),
+          passcode: pickPasscode(cached),
+        });
+        return;
+      }
 
-      return next;
-    });
-  }
+      const m = await ensureZoomMeetingForIso(selectedIso);
+      if (cancelled) return;
 
-  const atStart = date <= minDate;
+      const joinUrl = pickJoinUrl(m);
+      if (!joinUrl) {
+        setZoomError((prev) => prev || "Zoom meeting could not be created for this slot.");
+        return;
+      }
+      setZoomPreview({
+        iso: selectedIso,
+        joinUrl,
+        meetingId: pickMeetingId(m),
+        passcode: pickPasscode(m),
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedIso, isOnlineMedium, ensureZoomMeetingForIso, readZoomMeetingFromStorage]);
+
   const hasSlots = slots.length > 0;
-  const closedForDay =
-    !loading && !!dayMeta && dayMeta.open === false && !hasSlots;
+  const closedForDay = !loading && !!dayMeta && dayMeta.open === false && !hasSlots;
 
-  // ---- Order + Appointment creation ----
+  /* ------------------------------------------------------------------ */
+  /* Continue: order + appointment + zoom + email                        */
+  /* ------------------------------------------------------------------ */
 
-  async function handleContinue() {
+  const handleContinue = useCallback(async () => {
     setAppointmentError(null);
     setAppointmentSuccess(null);
+    setEmailError(null);
+    setEmailStatus("idle");
 
     if (!selectedIso) {
       setAppointmentError("Please select an appointment time first.");
@@ -553,48 +830,23 @@ export default function CalendarStep({
       return;
     }
     if (!cartItems.length) {
-      setAppointmentError(
-        "Your basket is empty. Please add at least one treatment before booking."
-      );
+      setAppointmentError("Your basket is empty. Please add at least one treatment before booking.");
       return;
     }
-
     if (hasCreatedAppointment) {
-      setAppointmentError(
-        "An appointment has already been created for this time."
-      );
+      setAppointmentError("An appointment has already been created for this time.");
       return;
     }
 
-    const userIdFromLocal = readIdFromLocal([
-      "user_id",
-      "pe_user_id",
-      "userId",
-      "patient_id",
-    ]);
+    const userIdFromLocal = readIdFromLocal(["user_id", "pe_user_id", "userId", "patient_id"]);
     const userId = userIdFromLocal || resolveUserIdFromStorage();
-
     if (!userId) {
       setAppointmentError("You need to be logged in to book an appointment.");
       return;
     }
 
-    // ✅ fetch user profile once so we can snapshot shipping address into order meta
-    let userProfile: LoggedInUser | null = null;
-    try {
-      userProfile = await getLoggedInUserApi();
-    } catch {
-      userProfile = null; // continue without blocking
-    }
-
-    const serviceIdFromLocal = readIdFromLocal([
-      "service_id",
-      "pe_service_id",
-      "serviceId",
-    ]);
-    const serviceId =
-      serviceIdFromLocal || resolveServiceId(schedule, cartItems);
-
+    const serviceIdFromLocal = readIdFromLocal(["service_id", "pe_service_id", "serviceId"]);
+    const serviceId = serviceIdFromLocal || resolveServiceId(schedule, cartItems);
     if (!serviceId) {
       setAppointmentError(
         "Missing service information for this booking. Please start again from the service page."
@@ -603,13 +855,13 @@ export default function CalendarStep({
     }
 
     const scheduleIdFromLocal = readIdFromLocal([
+      `schedule_id.${slug}`,
       "schedule_id",
       "pe_schedule_id",
       "scheduleId",
     ]);
     const effectiveScheduleId =
       scheduleIdFromLocal || (scheduleId ? String(scheduleId) : null);
-
     if (!effectiveScheduleId) {
       setAppointmentError(
         "Missing schedule information for this booking. Please start again from the service page."
@@ -623,49 +875,49 @@ export default function CalendarStep({
       return;
     }
 
-    const slotMinutes = (schedule as any).slot_minutes || 15;
     const endDate = new Date(startDate.getTime() + slotMinutes * 60_000);
     const endIso = endDate.toISOString();
 
-    // ✅ meta now includes:
-    // - price + line_total on each line
-    // - subtotal/total in both minor & major
-    // - shipping address snapshot (uses user's shipping if present)
-    const meta = buildOrderMeta({
-      cartItems,
-      serviceSlug: slug,
-      serviceName: (schedule as any).name,
-      appointmentIso: selectedIso,
-      user: userProfile,
-      currency: "GBP",
-    });
-
-    const orderPayload: any = {
-      user_id: String(userId),
-      service_id: String(serviceId),
-      schedule_id: String(effectiveScheduleId),
-      start_at: selectedIso,
-      end_at: endIso,
-      meta,
-      payment_status: "pending",
-      order_type: "new",
-    };
-
     setCreatingAppointment(true);
-    try {
-      // 1) Create order (with price + totals + shipping in meta)
-      const order = await createOrderApi(orderPayload);
-      const orderId = order && (order._id || null);
 
-      if (!orderId) {
-        throw new Error("Order was created but no id was returned.");
+    try {
+      // 0) Zoom (online only)
+      let zoomMeeting: ZoomMeeting | null = null;
+      let join = "";
+      let meetingId = "";
+      let passcode = "";
+      let hostUrl = "";
+
+      if (isOnlineMedium) {
+        zoomMeeting = await ensureZoomMeetingForIso(selectedIso);
+        join = pickJoinUrl(zoomMeeting);
+        meetingId = pickMeetingId(zoomMeeting);
+        passcode = pickPasscode(zoomMeeting);
+        hostUrl = pickHostUrl(zoomMeeting);
+
+        if (!join) {
+          setAppointmentError(zoomError || "Could not create Zoom meeting. Please try selecting the time again.");
+          return;
+        }
       }
 
-      try {
-        localStorage.setItem("order_id", String(orderId));
-      } catch {}
+      // 1) Draft order
+      const orderId = await ensureDraftOrder({
+        slug,
+        userId: String(userId),
+        serviceId: String(serviceId),
+        serviceName: serviceName || (service as any)?.name || (schedule as any)?.service?.name,
+        cartItems,
+        currency: "GBP",
+        scheduleId: String(effectiveScheduleId),
+        startAt: selectedIso,
+        endAt: endIso,
+      });
 
-      // 2) Create appointment linked to this order
+      safeStorage.setBoth("order_id", String(orderId));
+      safeStorage.setBoth(`order_id.${slug}`, String(orderId));
+
+      // 2) Create appointment
       const appointmentPayload: CreateAppointmentPayload = {
         order_id: String(orderId),
         user_id: String(userId),
@@ -677,45 +929,122 @@ export default function CalendarStep({
 
       const appointment = await createAppointmentApi(appointmentPayload);
 
-      const appointmentId =
-        (appointment && ((appointment as any)._id || (appointment as any).id)) ||
-        null;
+      const appointmentId = (appointment as any)?._id || (appointment as any)?.id || null;
       const appointmentStart =
-        (appointment as any)?.start_at ||
-        (appointment as any)?.startAt ||
-        selectedIso;
+        (appointment as any)?.start_at || (appointment as any)?.startAt || selectedIso;
 
-      // Mark order as having an appointment booked
+      // mirror cache if backend start differs
+      if (isOnlineMedium && zoomMeeting && appointmentStart && appointmentStart !== selectedIso) {
+        writeZoomMeetingToStorage(String(appointmentStart), zoomMeeting);
+      }
+
+      // Update appointment with zoom URLs (non-blocking)
+      if (isOnlineMedium && appointmentId && join) {
+        try {
+          await updateAppointmentApi(String(appointmentId), {
+            join_url: join,
+            host_url: hostUrl,
+            meeting_id: meetingId,
+            passcode: passcode,
+          } as any);
+        } catch (err) {
+          if (process.env.NODE_ENV !== "production") {
+            console.error("Failed to update appointment with Zoom fields:", err);
+          }
+        }
+      }
+
+      // 3) Mark order booked
       try {
         await updateOrderApi(String(orderId), {
           is_appointment_booked: true,
         } as any);
       } catch (err) {
         if (process.env.NODE_ENV !== "production") {
-          console.error(
-            "Failed to update order is_appointment_booked flag:",
-            err
-          );
+          console.error("Failed to update order is_appointment_booked flag:", err);
         }
       }
 
+      // 4) Persist duplicate guard (save for both keys)
       try {
-        if (appointmentId)
-          localStorage.setItem("appointment_id", String(appointmentId));
-        if (appointmentStart)
-          localStorage.setItem(
-            "appointment_start_at",
-            String(appointmentStart)
-          );
-
-        const key = `appointment_created.${slug}.${appointmentStart}`;
-        localStorage.setItem(key, "1");
+        if (appointmentId) safeStorage.set("appointment_id", String(appointmentId));
+        safeStorage.set(`appointment_created.${slug}.${selectedIso}`, "1");
+        safeStorage.set(`appointment_created.${slug}.${appointmentStart}`, "1");
         setHasCreatedAppointment(true);
       } catch {}
 
-      setAppointmentSuccess(
-        "Appointment booked successfully. Redirecting to payment…"
-      );
+      // 5) Email (online only) — do NOT block booking if email fails
+      if (isOnlineMedium) {
+        const emailKey = appointmentId
+          ? `zoom_email_sent.${appointmentId}`
+          : `zoom_email_sent.${slug}.${appointmentStart}`;
+
+        const alreadySent =
+          typeof window !== "undefined" && window.localStorage.getItem(emailKey) === "1";
+
+        if (!alreadySent) {
+          const customer = resolveCustomerFromStorage();
+          const to = customer.email;
+
+          if (!to) {
+            setEmailStatus("failed");
+            setEmailError("Email not sent: customer email is missing in storage.");
+          } else {
+            const baseName = serviceName || "Consultation";
+            const topic = `${baseName} consultancy call`;
+            const tz = String((schedule as any)?.timezone || "Europe/London");
+
+            setEmailStatus("sending");
+            try {
+              const result = await sendEmailApi({
+                to,
+                subject: `${baseName} Zoom appointment confirmed`,
+                template: "zoom",
+                context: {
+                  name: customer.name || "Customer",
+                  email: to,
+                  serviceName: baseName,
+                  appointmentAt: formatForEmail(String(appointmentStart), tz),
+                  durationMinutes: slotMinutes,
+                  topic,
+                  orderId: String(orderId),
+                  appointmentId: appointmentId ? String(appointmentId) : "",
+
+                  joinUrl: join,
+                  zoomJoinUrl: join,
+                  join_url: join,
+
+                  meetingId: meetingId,
+                  zoomMeetingId: meetingId,
+                  meeting_id: meetingId,
+                  id: meetingId,
+
+                  passcode: passcode,
+                  zoomPasscode: passcode,
+                  password: passcode,
+                },
+              });
+
+              if (result && (result as any).success === false) {
+                throw new Error((result as any).message || "Email sending failed (success=false).");
+              }
+
+              try {
+                window.localStorage.setItem(emailKey, "1");
+              } catch {}
+
+              setEmailStatus("sent");
+            } catch (e: any) {
+              setEmailStatus("failed");
+              setEmailError(e?.message || "Email could not be sent.");
+            }
+          }
+        } else {
+          setEmailStatus("sent");
+        }
+      }
+
+      setAppointmentSuccess("Appointment booked successfully. Redirecting to payment…");
 
       if (goToPaymentStep) {
         goToPaymentStep();
@@ -723,22 +1052,40 @@ export default function CalendarStep({
       }
 
       const qp = new URLSearchParams();
-      if (appointmentStart) qp.set("appointment_at", appointmentStart);
       qp.set("service_slug", slug);
-      if (orderId) qp.set("order", String(orderId));
+      qp.set("slug", slug);
+      qp.set("order", String(orderId));
       qp.set("step", "payment");
+      qp.set("appointment_at", String(selectedIso));
 
-      router.push(
-        `/private-services/${encodeURIComponent(slug)}/book?${qp.toString()}`
-      );
+      router.push(`/private-services/${encodeURIComponent(slug)}/book?${qp.toString()}`);
     } catch (e: any) {
-      setAppointmentError(e?.message || "Failed to create booking.");
+      const msg = e?.message || "Failed to create booking.";
+      setAppointmentError(msg);
     } finally {
       setCreatingAppointment(false);
     }
-  }
+  }, [
+    selectedIso,
+    schedule,
+    cartItems,
+    hasCreatedAppointment,
+    slug,
+    scheduleId,
+    slotMinutes,
+    isOnlineMedium,
+    ensureZoomMeetingForIso,
+    zoomError,
+    serviceName,
+    service,
+    router,
+    goToPaymentStep,
+    writeZoomMeetingToStorage,
+  ]);
 
-  const isToday = date === minDate;
+  /* ------------------------------------------------------------------ */
+  /* UI                                                                 */
+  /* ------------------------------------------------------------------ */
 
   return (
     <div className="w-full">
@@ -749,14 +1096,24 @@ export default function CalendarStep({
             <h1 className="mt-1 text-2xl font-semibold text-gray-900 md:text-3xl">
               Choose an appointment
             </h1>
+
             {schedule && (
               <p className="mt-2 text-xs text-gray-500">
-                {(schedule as any).name} • Times shown in{" "}
+                {serviceName || (schedule as any).name} • Times shown in{" "}
                 <span className="font-medium">
                   {(schedule as any).timezone || "local time"}
                 </span>{" "}
-                • {(schedule as any).slot_minutes}
-                -minute slots
+                • {(schedule as any).slot_minutes}-minute slots
+                {appointmentMedium ? (
+                  <span className="ml-2 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-700">
+                    Medium: {appointmentMedium}
+                  </span>
+                ) : null}
+                {isOnlineMedium ? (
+                  <span className="ml-2 rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
+                    Online
+                  </span>
+                ) : null}
               </p>
             )}
           </div>
@@ -779,14 +1136,17 @@ export default function CalendarStep({
               >
                 ‹
               </button>
+
               <div className="min-w-[8rem] text-center text-xs md:text-sm font-medium text-gray-700">
                 {formatYmdForDisplay(date)}
               </div>
-              {isToday && (
+
+              {date === minDate && (
                 <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-700">
                   Today
                 </span>
               )}
+
               <button
                 type="button"
                 onClick={() => shiftDay(1)}
@@ -799,10 +1159,7 @@ export default function CalendarStep({
             </div>
 
             <div className="flex items-center gap-2">
-              <label
-                htmlFor="date-picker"
-                className="text-[11px] text-gray-500"
-              >
+              <label htmlFor="date-picker" className="text-[11px] text-gray-500">
                 Jump to date:
               </label>
               <input
@@ -819,17 +1176,14 @@ export default function CalendarStep({
         </div>
 
         <p className="mt-3 text-sm text-gray-600">
-          Select an available time below, then continue to payment to confirm
-          your booking.
+          Select an available time below, then continue to payment to confirm your booking.
         </p>
 
         {/* Override / status banner */}
         {dayMeta?.hasOverride && (
           <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
             Special hours for this date
-            {dayMeta.start && dayMeta.end
-              ? `: ${dayMeta.start}–${dayMeta.end}`
-              : ""}
+            {dayMeta.start && dayMeta.end ? `: ${dayMeta.start}–${dayMeta.end}` : ""}
             {dayMeta.overrideNote ? ` • ${dayMeta.overrideNote}` : ""}
           </div>
         )}
@@ -846,25 +1200,39 @@ export default function CalendarStep({
           </div>
         )}
 
+        {emailError && (
+          <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+            Email status: {emailError}
+          </div>
+        )}
+
         {appointmentSuccess && (
           <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">
             {appointmentSuccess}
           </div>
         )}
 
+        {zoomError && isOnlineMedium && selectedIso ? (
+          <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-2 text-xs text-rose-700">
+            Zoom error: {zoomError}
+          </div>
+        ) : null}
+
+        {isOnlineMedium && selectedIso && zoomPreview?.iso === selectedIso && zoomPreview.joinUrl ? (
+          <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-xs text-emerald-700">
+            Zoom ready for this slot.
+          </div>
+        ) : null}
+
         {/* Slots */}
         <div className="mt-6">
           {loading ? (
             <div className="text-sm text-gray-500">Loading schedule…</div>
           ) : error ? (
-            <div className="text-sm text-rose-600">
-              Failed to load schedule: {error}
-            </div>
+            <div className="text-sm text-rose-600">Failed to load schedule: {error}</div>
           ) : !schedule ? (
-            <div className="text-sm text-gray-500">
-              No schedule found for this service.
-            </div>
-          ) : !hasSlots ? (
+            <div className="text-sm text-gray-500">No schedule found for this service.</div>
+          ) : !slots.length ? (
             <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-sm text-gray-500 text-center">
               No slots available for this date. Try another day.
             </div>
@@ -883,16 +1251,13 @@ export default function CalendarStep({
                       typeof bookedSlots?.capacity === "number" &&
                       bookedForTime.count >= bookedSlots.capacity));
 
-                const isDisabled =
-                  !s.available || s.remaining <= 0 || isFullFromApi;
+                const isDisabled = !s.available || s.remaining <= 0 || isFullFromApi;
 
                 return (
                   <button
                     key={s.start_at}
                     type="button"
-                    onClick={() =>
-                      !isDisabled && handleSelect(s.start_at, s.time)
-                    }
+                    onClick={() => !isDisabled && handleSelect(s.start_at, s.time)}
                     disabled={isDisabled}
                     aria-disabled={isDisabled}
                     className={`px-3 py-2 rounded-xl border text-xs md:text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 transition ${
@@ -904,18 +1269,12 @@ export default function CalendarStep({
                         ? "opacity-60 cursor-not-allowed bg-gray-50 text-gray-400 border-gray-200"
                         : "cursor-pointer"
                     }`}
-                    title={
-                      isDisabled
-                        ? "This time is not available"
-                        : "Select this time"
-                    }
+                    title={isDisabled ? "This time is not available" : "Select this time"}
                   >
                     <div className="font-medium p-3">
                       {s.time}
                       {isFullFromApi && (
-                        <span className="ml-1 text-[10px] text-rose-500">
-                          (Full)
-                        </span>
+                        <span className="ml-1 text-[10px] text-rose-500">(Full)</span>
                       )}
                     </div>
                   </button>
@@ -933,29 +1292,54 @@ export default function CalendarStep({
                 <>
                   Selected time:{" "}
                   <span className="font-semibold text-gray-800">
-                    {new Date(selectedIso).toLocaleString(undefined, {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    })}
+                    {formatIsoInTimeZone(selectedIso, String((schedule as any)?.timezone || "Europe/London"))}
                   </span>
+
                   {hasCreatedAppointment && (
                     <span className="ml-2 text-emerald-600 font-medium">
                       • Appointment already created for this time
                     </span>
                   )}
+
+                  {isOnlineMedium && zoomCreating && (
+                    <span className="ml-2 text-gray-500 font-medium">
+                      • Creating Zoom meeting…
+                    </span>
+                  )}
+
+                  {isOnlineMedium && !zoomCreating && zoomPreview?.iso === selectedIso && zoomPreview?.joinUrl ? (
+                    <span className="ml-2 text-emerald-700 font-medium">
+                      • Zoom ready
+                    </span>
+                  ) : null}
+
+                  {isOnlineMedium && emailStatus === "sending" ? (
+                    <span className="ml-2 text-gray-500 font-medium">• Email sending…</span>
+                  ) : emailStatus === "sent" ? (
+                    <span className="ml-2 text-emerald-700 font-medium">• Email sent</span>
+                  ) : emailStatus === "failed" ? (
+                    <span className="ml-2 text-amber-700 font-medium">• Email failed</span>
+                  ) : null}
                 </>
               ) : (
                 "No time selected yet."
               )}
             </div>
+
             <button
               type="button"
               onClick={handleContinue}
               disabled={
-                creatingAppointment || !selectedIso || hasCreatedAppointment
+                creatingAppointment ||
+                !selectedIso ||
+                hasCreatedAppointment ||
+                (isOnlineMedium && zoomCreating)
               }
               className={`inline-flex items-center rounded-full px-5 py-2 text-sm font-semibold text-white shadow-sm ${
-                creatingAppointment || !selectedIso || hasCreatedAppointment
+                creatingAppointment ||
+                !selectedIso ||
+                hasCreatedAppointment ||
+                (isOnlineMedium && zoomCreating)
                   ? "bg-emerald-300 cursor-not-allowed opacity-80"
                   : "bg-emerald-600 hover:bg-emerald-700"
               }`}
@@ -964,6 +1348,8 @@ export default function CalendarStep({
                 ? "Booking…"
                 : hasCreatedAppointment
                 ? "Appointment created"
+                : isOnlineMedium && zoomCreating
+                ? "Preparing Zoom…"
                 : "Book appointment"}
             </button>
           </div>
