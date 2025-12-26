@@ -87,10 +87,10 @@ CMD ["npm", "run", "start"]
 
 
 
-# docker build  --no-cache -t 192.168.13.72:5000/userukproject_new_20_dec_2025_latest .      
-# docker run -d --name userukproject_new_20_dec_2025_latest -p 80:80 userukproject_new_20_dec_2025_latest_image
+# docker build  --no-cache -t 192.168.13.72:5000/userukproject_new_24_dec_2025_latest .      
+# docker run -d --name userukproject_new_24_dec_2025_latest -p 80:80 userukproject_new_24_dec_2025_latest_image
 
-# docker tag userukproject_new_20_dec_2025_latest_image 192.168.13.72:5000/userukproject_new_20_dec_2025_latest
-# docker push 192.168.13.72:5000/userukproject_new_20_dec_2025_latest
-# docker pull 192.168.13.72:5000/userukproject_new_20_dec_2025_latest
-# docker run -d --name userukproject_new_20_dec_2025_latest -p 8002:8002 192.168.13.72:5000/userukproject_new_20_dec_2025_latest
+# docker tag userukproject_new_24_dec_2025_latest_image 192.168.13.72:5000/userukproject_new_24_dec_2025_latest
+# docker push 192.168.13.72:5000/userukproject_new_24_dec_2025_latest
+# docker pull 192.168.13.72:5000/userukproject_new_24_dec_2025_latest
+# docker run -d --name userukproject_new_24_dec_2025_latest -p 8002:8002 192.168.13.72:5000/userukproject_new_24_dec_2025_latest
