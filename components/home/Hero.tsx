@@ -39,7 +39,7 @@ const resolveImageUrl = (imagePath?: string | null) => {
     : `/${imagePath}`;
 
   // Public assets served by Next (no backend prefix)
-  if (!normalizedPath.startsWith("/upload")) {
+  if (!normalizedPath.startsWith("/api/assets")) {
     return normalizedPath;
   }
 

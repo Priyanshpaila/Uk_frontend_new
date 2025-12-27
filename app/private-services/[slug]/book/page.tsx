@@ -17,8 +17,9 @@ import toast from "react-hot-toast";
 import { useCart } from "@/components/cart/cart-context";
 import {
   ensureDraftOrder,
-  getOrderIdForSlug,
   ORDER_ID_KEY,
+  ORDER_FINALIZED_KEY,
+  clearFinalizedOrderForSlug,
 } from "./booking-order";
 
 /* -------------------------------------------------------------------------- */
@@ -158,27 +159,6 @@ function extractAssignedRafFormId(service: any): string | undefined {
 
   const list = Array.isArray(assignments) ? assignments : [];
 
-  const pickId = (v: any): string | undefined => {
-    if (!v) return undefined;
-    const id =
-      v?.form_id ??
-      v?.formId ??
-      v?.clinic_form_id ??
-      v?.clinicFormId ??
-      v?.clinic_form?._id ??
-      v?.clinicForm?._id ??
-      v?.form?._id ??
-      v?._id;
-    if (!id) return undefined;
-    const s = String(id).trim();
-    return s ? s : undefined;
-  };
-
-  const normaliseType = (v: any) =>
-    String(v ?? "")
-      .trim()
-      .toLowerCase();
-
   const rafLike = list.find((a: any) => {
     const t =
       normaliseType(a?.form_type) ||
@@ -219,7 +199,7 @@ function extractAssignedRafFormId(service: any): string | undefined {
 
 function safeGetLocal(key: string): string | undefined {
   try {
-    const v = window.localStorage.getItem(key);
+    const v = window.localStorage.getItem(key) || window.sessionStorage.getItem(key);
     const s = String(v ?? "").trim();
     return s ? s : undefined;
   } catch {
@@ -235,10 +215,8 @@ function clearRafCacheForSlug(slug: string) {
     window.localStorage.removeItem(RAF_ANSWERS_ASSESS_KEY(slug));
     window.localStorage.removeItem(RAF_LABELS_KEY(slug));
     window.localStorage.removeItem(RAF_SECTION_STORAGE_KEY(slug));
-    // do NOT remove RAF_FORM_ID_KEY here; caller will set the new value
   } catch {}
 
-  // Clear last_raf only if it belongs to this slug
   try {
     const last = window.localStorage.getItem("last_raf");
     if (last) {
@@ -250,7 +228,6 @@ function clearRafCacheForSlug(slug: string) {
 
 /**
  * Clear booking-specific storage for a given service slug.
- * (We still clear order-related keys here, but this page no longer creates orders.)
  */
 function clearBookingStateForSlug(slug: string) {
   if (typeof window === "undefined" || !slug) return;
@@ -259,7 +236,6 @@ function clearBookingStateForSlug(slug: string) {
   const ss = window.sessionStorage;
 
   const keys = [
-    // appointment / calendar selection
     "appointment_at",
     "appointment_date",
     "appointment_time",
@@ -269,7 +245,6 @@ function clearBookingStateForSlug(slug: string) {
     "booking_at",
     "calendar_selected_at",
 
-    // schedule + booking routing
     "schedule_id",
     "booking_next",
     "booking_slug",
@@ -278,13 +253,13 @@ function clearBookingStateForSlug(slug: string) {
     "order_id",
     "order_last_body",
     ORDER_ID_KEY(slug),
- 
-    // consultation session
+    `order_ref.${slug}`,
+    "order_ref",
+
     "consultation_session_id",
     "pe_consultation_session_id",
     "consultationSessionId",
 
-    // raf helper keys (but NOT raf_answers.* by default)
     "last_raf",
     STEP_STORAGE_KEY(slug),
     RAF_SECTION_STORAGE_KEY(slug),
@@ -382,10 +357,8 @@ export default function BookServicePage() {
 
   const modeSegment = isReorderRoute ? "reorder" : "book";
 
-  // slug state
   const [slug, setSlug] = React.useState<string>(slugFromRoute);
 
-  // ✅ FIX 1: keep route slug and stored slug consistent
   React.useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -400,7 +373,6 @@ export default function BookServicePage() {
 
     const cleanedStored = String(storedSlug || "").trim();
 
-    // If route slug exists and differs, route slug should win (prevents stale local slug)
     if (routeSlug && cleanedStored && cleanedStored !== routeSlug) {
       try {
         window.localStorage.setItem("service_slug", routeSlug);
@@ -410,13 +382,11 @@ export default function BookServicePage() {
       return;
     }
 
-    // If stored exists, use it (matches route or route missing)
     if (cleanedStored) {
       setSlug(cleanedStored);
       return;
     }
 
-    // Otherwise use route slug and store it
     if (routeSlug) {
       try {
         window.localStorage.setItem("service_slug", routeSlug);
@@ -454,16 +424,13 @@ export default function BookServicePage() {
 
   const clearCartSafely = async () => {
     try {
-      // Most common APIs
       if (typeof cart?.clearCart === "function") return await cart.clearCart();
       if (typeof cart?.clear === "function") return await cart.clear();
       if (typeof cart?.resetCart === "function") return await cart.resetCart();
       if (typeof cart?.reset === "function") return await cart.reset();
       if (typeof cart?.setItems === "function") return cart.setItems([]);
 
-      // Reducer-style carts
       if (typeof cart?.dispatch === "function") {
-        // try a few common action names (harmless if ignored)
         cart.dispatch({ type: "CLEAR_CART" });
         cart.dispatch({ type: "CLEAR" });
         cart.dispatch({ type: "RESET" });
@@ -471,7 +438,6 @@ export default function BookServicePage() {
       }
     } catch {}
 
-    // Optional fallback if your cart persists in localStorage (only if you use these keys)
     try {
       localStorage.removeItem("cart");
       localStorage.removeItem("cart_items");
@@ -479,7 +445,7 @@ export default function BookServicePage() {
     } catch {}
   };
 
-  /* ---------- Load service detail (by slug) & store ids locally ----- */
+  /* ---------- Load service detail ----- */
 
   React.useEffect(() => {
     let cancelled = false;
@@ -498,7 +464,6 @@ export default function BookServicePage() {
 
         setService(s);
 
-        // ✅ store service_id & slug
         try {
           if (typeof window !== "undefined" && s?._id) {
             const sid = String(s._id);
@@ -509,17 +474,13 @@ export default function BookServicePage() {
           }
         } catch {}
 
-        // ✅ FIX 2: sync RAF form id from service assignments into localStorage
         try {
           const assignedRafFormId = extractAssignedRafFormId(s);
           if (assignedRafFormId) {
             const existing = safeGetLocal(RAF_FORM_ID_KEY(slug));
 
-            // if changed, clear stale RAF caches so old schema/answers don't stick
             if (existing && existing !== assignedRafFormId) {
               clearRafCacheForSlug(slug);
-              // optional: small notice (remove if you don't want)
-              // toast.success("Medical questions have been updated. Please review your answers.");
             }
 
             window.localStorage.setItem(
@@ -531,9 +492,7 @@ export default function BookServicePage() {
               assignedRafFormId
             );
           }
-        } catch {
-          // ignore RAF sync errors
-        }
+        } catch {}
       } catch (e) {
         console.error("Failed to load service detail", e);
       } finally {
@@ -571,7 +530,7 @@ export default function BookServicePage() {
 
   const [currentStep, setCurrentStep] = React.useState<StepKey>("treatments");
 
-  /* ---------- Restore current step from URL (?step=) or localStorage ------- */
+  /* ---------- Restore current step ------- */
 
   React.useEffect(() => {
     if (!slug) return;
@@ -654,12 +613,30 @@ export default function BookServicePage() {
     }
   }, [isLoggedIn, currentStep, goToStep, flow]);
 
+  // ✅ Clear booking state on success (keep), but finalized flag prevents any new order creation
   React.useEffect(() => {
     if (!slug) return;
     if (currentStep === "success") {
       clearBookingStateForSlug(slug);
     }
   }, [slug, currentStep]);
+
+  // ✅ NEW: if user starts a fresh booking (treatments/login without ?order), clear finalized flag
+  React.useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!slug) return;
+
+    const stepParam = (searchParams.get("step") || "treatments").toLowerCase();
+    const orderParam = searchParams.get("order");
+
+    const isFreshEntry =
+      !orderParam &&
+      (stepParam === "treatments" || stepParam === "login" || stepParam === "");
+
+    if (isFreshEntry) {
+      clearFinalizedOrderForSlug(slug);
+    }
+  }, [slug, searchParams]);
 
   const canProceedFrom = React.useCallback(
     (step: StepKey): { ok: boolean; message?: string } => {
@@ -683,7 +660,7 @@ export default function BookServicePage() {
     [hasCartItems, isLoggedIn]
   );
 
-    const cartSignature = React.useMemo(() => {
+  const cartSignature = React.useMemo(() => {
     const safe = (cartItems || []).map((ci: any) => ({
       sku: ci.sku || "",
       name: ci.name || "",
@@ -698,7 +675,6 @@ export default function BookServicePage() {
           : 0,
       variation: ci.variation || ci.variations || ci.optionLabel || ci.label || "",
     }));
-    // stable ordering
     safe.sort((a, b) => (a.sku + a.variation).localeCompare(b.sku + b.variation));
     return JSON.stringify(safe);
   }, [cartItems]);
@@ -706,25 +682,27 @@ export default function BookServicePage() {
   const ensureOrderDebounceRef = React.useRef<number | null>(null);
 
   React.useEffect(() => {
-    // Draft order creation should happen only when we have user + service + cart.
+    // ✅ HARD STOP: never create/ensure draft while on success
+    if (currentStep === "success") return;
+
     if (!slug) return;
     if (!isLoggedIn) return;
     if (!service?._id) return;
     if (!cartItems?.length) return;
-
-    // avoid doing it while on login step (optional but cleaner)
     if (currentStep === "login") return;
+
+    // ✅ HARD STOP: if finalized flag exists, do not ensure/create new order
+    if (typeof window !== "undefined") {
+      const finalized = safeGetLocal(ORDER_FINALIZED_KEY(slug));
+      if (finalized) return;
+    }
 
     if (ensureOrderDebounceRef.current) {
       window.clearTimeout(ensureOrderDebounceRef.current);
     }
 
     ensureOrderDebounceRef.current = window.setTimeout(() => {
-      const userId =
-        (user as any)?._id ||
-        (user as any)?.id ||
-        "";
-
+      const userId = (user as any)?._id || (user as any)?.id || "";
       if (!userId) return;
 
       void ensureDraftOrder({
@@ -747,8 +725,16 @@ export default function BookServicePage() {
         ensureOrderDebounceRef.current = null;
       }
     };
-  }, [slug, isLoggedIn, service?._id, (service as any)?.name, cartSignature, currentStep, cartItems, user]);
-
+  }, [
+    slug,
+    isLoggedIn,
+    service?._id,
+    (service as any)?.name,
+    cartSignature,
+    currentStep,
+    cartItems,
+    user,
+  ]);
 
   const handleNext = async () => {
     if (!nextStep) return;
@@ -759,8 +745,12 @@ export default function BookServicePage() {
       return;
     }
 
-    // ✅ Guarantee draft order exists before payment/success even if calendar step removed
-    if ((nextStep === "payment" || nextStep === "success") && isLoggedIn && service?._id && cartItems.length) {
+    if (
+      (nextStep === "payment" || nextStep === "success") &&
+      isLoggedIn &&
+      service?._id &&
+      cartItems.length
+    ) {
       const userId = (user as any)?._id || (user as any)?.id || "";
       if (!userId) {
         toast.error("Please log in again.");
@@ -784,7 +774,6 @@ export default function BookServicePage() {
 
     goToStep(nextStep);
   };
-
 
   const handlePrev = () => {
     if (!prevStep) return;
@@ -812,6 +801,10 @@ export default function BookServicePage() {
             <button
               type="button"
               onClick={async () => {
+                // ✅ start fresh if user leaves booking
+                try {
+                  if (slug) clearFinalizedOrderForSlug(slug);
+                } catch {}
                 await clearCartSafely();
                 window.location.href = `/private-services/${slug}`;
               }}

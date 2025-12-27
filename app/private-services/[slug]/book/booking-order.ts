@@ -16,6 +16,9 @@ export const ORDER_ID_KEY = (slug: string) => `order_id.${slug}`;
 /** Per-slug order reference key (stable across steps; helps recover order if id not stored) */
 export const ORDER_REF_KEY = (slug: string) => `order_ref.${slug}`;
 
+/** ✅ Per-slug finalized key: when set, NEVER create a new order implicitly */
+export const ORDER_FINALIZED_KEY = (slug: string) => `order_finalized.${slug}`;
+
 /** Generic storage reader (localStorage -> sessionStorage) */
 function readFirst(keys: string[]): string | null {
   if (typeof window === "undefined") return null;
@@ -61,6 +64,27 @@ export function setOrderRefForSlug(slug: string, ref: string) {
   if (!slug || !ref) return;
   writeBoth(ORDER_REF_KEY(slug), String(ref));
   writeBoth("order_ref", String(ref)); // optional alias
+}
+
+/** ✅ finalized helpers */
+export function getFinalizedOrderForSlug(slug: string): string | null {
+  if (!slug) return null;
+  return readFirst([ORDER_FINALIZED_KEY(slug)]);
+}
+
+export function setFinalizedOrderForSlug(slug: string, orderId: string) {
+  if (!slug || !orderId) return;
+  writeBoth(ORDER_FINALIZED_KEY(slug), String(orderId));
+}
+
+export function clearFinalizedOrderForSlug(slug: string) {
+  if (!slug || typeof window === "undefined") return;
+  try {
+    window.localStorage.removeItem(ORDER_FINALIZED_KEY(slug));
+  } catch {}
+  try {
+    window.sessionStorage.removeItem(ORDER_FINALIZED_KEY(slug));
+  } catch {}
 }
 
 function minorToMajor(minor: number): number {
@@ -250,10 +274,6 @@ export type EnsureDraftOrderInput = {
 };
 
 /* -------------------- in-flight lock to prevent double create -------------------- */
-/**
- * IMPORTANT:
- * locks must allow "undefined" for missing keys, otherwise TS thinks locks[lk] is always defined.
- */
 function getLocks(): Record<string, Promise<string> | undefined> {
   const w = window as any;
   if (!w.__peEnsureSingleOrderLocks) w.__peEnsureSingleOrderLocks = {};
@@ -265,15 +285,25 @@ function lockKey(i: EnsureDraftOrderInput) {
   return `${i.slug}::${i.userId}`;
 }
 
-function looksLikeNotFound(err: any) {
+/** ✅ robust 404 check (do NOT rely on message text) */
+function is404(err: any) {
+  const status =
+    err?.status ||
+    err?.response?.status ||
+    err?.cause?.status ||
+    err?.data?.statusCode ||
+    err?.data?.status ||
+    null;
+  if (Number(status) === 404) return true;
+
+  // fallback (only if your fetch wrapper throws plain messages)
   const msg = String(err?.message || err || "").toLowerCase();
-  return msg.includes("404") || msg.includes("not found") || msg.includes("no order");
+  return msg.includes(" 404 ") || msg.includes("status 404");
 }
 
 /**
  * Creates ONE order once, then only updates the same order in every step.
- * Key rule: on UPDATE, DO NOT send user_id/service_id again.
- * ALSO: do NOT send "reference" in payload (backend auto generates it).
+ * Also: if order is finalized, NEVER auto-create a new order.
  */
 export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<string> {
   if (!input.slug) throw new Error("Missing service slug.");
@@ -283,17 +313,24 @@ export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<st
     throw new Error("Basket is empty.");
   }
 
+  // ✅ If finalized flag exists, never create a new order implicitly.
+  const finalized = getFinalizedOrderForSlug(input.slug);
+  const existingStored = getOrderIdForSlug(input.slug);
+  if (finalized) {
+    // prefer stored id, else use finalized value
+    const id = existingStored || finalized;
+    if (id) return id;
+  }
+
   const locks = getLocks();
   const lk = lockKey(input);
 
-  // ✅ Correct guard (no await). If a promise exists, return it.
-  const existing = locks[lk];
-  if (existing) return existing;
+  const existingJob = locks[lk];
+  if (existingJob) return existingJob;
 
   const job = (async () => {
     const { slug, userId, serviceId, serviceName, cartItems } = input;
 
-    // appointment snapshot OPTIONAL
     const appointmentIso =
       input.startAt ||
       readFirst([
@@ -303,7 +340,6 @@ export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<st
         "calendar_selected_at",
       ]);
 
-    // user profile snapshot (shipping)
     let userProfile: LoggedInUser | null = null;
     try {
       userProfile = await getLoggedInUserApi();
@@ -311,13 +347,11 @@ export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<st
       userProfile = null;
     }
 
-    // schedule id OPTIONAL
     const scheduleId =
       input.scheduleId ||
       readFirst([`schedule_id.${slug}`, "schedule_id", "pe_schedule_id", "scheduleId"]) ||
       (await ensureScheduleIdForSlug(slug));
 
-    // meta
     const meta = buildDraftOrderMeta({
       slug,
       serviceName,
@@ -327,10 +361,9 @@ export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<st
       appointmentIso: appointmentIso || null,
     });
 
-    // prefer stored order id
     let orderId = getOrderIdForSlug(slug);
 
-    // If missing id, try recover by BACKEND-generated reference (stored earlier)
+    // recover by reference
     if (!orderId) {
       const storedRef = getOrderRefForSlug(slug);
       if (storedRef) {
@@ -341,7 +374,6 @@ export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<st
             orderId = String(foundId);
             setOrderIdForSlug(slug, orderId);
 
-            // refresh stored reference if backend returns it
             const backendRef =
               (existingByRef as any)?.reference ||
               (existingByRef as any)?.ref ||
@@ -349,7 +381,7 @@ export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<st
             if (backendRef) setOrderRefForSlug(slug, String(backendRef));
           }
         } catch {
-          // ignore: will create if needed
+          // ignore
         }
       }
     }
@@ -366,7 +398,6 @@ export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<st
       try {
         const updated: any = await updateOrderApi(orderId, updatePayload);
 
-        // store backend reference if present (still NOT sent by us)
         const backendRef =
           updated?.reference || updated?.ref || (updated?.data?.reference ?? null);
         if (backendRef) setOrderRefForSlug(slug, String(backendRef));
@@ -374,22 +405,20 @@ export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<st
         setOrderIdForSlug(slug, orderId);
         return orderId;
       } catch (err: any) {
-        // Only allow create if the existing order truly doesn't exist anymore.
-        if (looksLikeNotFound(err)) {
+        // ✅ only if TRUE 404 we allow create (deleted order id)
+        if (is404(err)) {
           try {
-            // clear bad id so create can happen safely
             writeBoth(ORDER_ID_KEY(slug), "");
           } catch {}
           orderId = null;
         } else {
-          // ✅ IMPORTANT: do NOT create a second order on update failure
+          // ✅ do NOT create a second order on other failures
           throw err;
         }
       }
     }
 
-    // CREATE (only once): set user_id/service_id here only
-    // ✅ DO NOT send reference; backend auto generates it
+    // CREATE
     const createPayload: any = {
       user_id: userId,
       service_id: serviceId,
@@ -405,13 +434,12 @@ export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<st
 
     const created: any = await createOrderApi(createPayload);
 
-    const newId = created && (created._id || created.id || null);
+    const newId = created && (created._id || created.id || created?.data?._id || created?.data?.id || null);
     if (!newId) throw new Error("Order created but no id returned.");
 
     const finalId = String(newId);
     setOrderIdForSlug(slug, finalId);
 
-    // store backend-generated reference if it exists in response
     const backendRef =
       created?.reference || created?.ref || created?.data?.reference || null;
     if (backendRef) setOrderRefForSlug(slug, String(backendRef));
@@ -424,7 +452,6 @@ export async function ensureDraftOrder(input: EnsureDraftOrderInput): Promise<st
   try {
     return await job;
   } finally {
-    // Only delete if it's still the same job (extra safety)
     if (locks[lk] === job) delete locks[lk];
   }
 }

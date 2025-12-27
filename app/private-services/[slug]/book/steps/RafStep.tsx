@@ -1469,7 +1469,7 @@ export default function RafStep() {
                   Next section
                 </button>
               </div>
-              <button
+              {/* <button
                 type="button"
                 onClick={onSubmit}
                 disabled={submitting || hasUploadingFiles}
@@ -1480,7 +1480,7 @@ export default function RafStep() {
                 }`}
               >
                 {submitting ? "Saving…" : "Save & continue"}
-              </button>
+              </button> */}
             </div>
           </footer>
         </section>
