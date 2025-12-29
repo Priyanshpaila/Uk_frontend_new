@@ -16,15 +16,15 @@ const nextConfig = {
       // ⬇️ Root live backend
       {
         protocol: "https", // use https if your backend is https
-        hostname: "safescript.co.uk",
+        hostname: "pharma-health.co.uk",
         port: "",
         pathname: "/api/assets/**",
       },
 
-      // ⬇️ Any subdomain like pri.safescript.co.uk, abc.safescript.co.uk, etc.
+      // ⬇️ Any subdomain like pri.pharma-health.co.uk, abc.pharma-health.co.uk, etc.
       {
         protocol: "https",
-        hostname: "**.safescript.co.uk",
+        hostname: "**.pharma-health.co.uk",
         port: "",
         pathname: "/api/assets/**",
       },
