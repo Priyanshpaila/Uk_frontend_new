@@ -474,10 +474,10 @@ export default async function ServiceLanding({
                 className={`mx-auto max-w-5xl rounded-3xl border border-emerald-100/70 bg-white/85 ${blurCls} px-5 py-6 shadow-soft-card ring-1 ring-slate-900/5 md:px-8 md:py-8`}
               >
                 {/* Top pill */}
-                <div className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-800">
+                {/* <div className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-800">
                   <span className="h-1 w-1 rounded-full bg-emerald-700" />
                   <span>Pharmacy Express</span>
-                </div>
+                </div> */}
 
                 {/* Title intentionally left dynamic / handled by content if needed */}
 

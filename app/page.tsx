@@ -1,4 +1,4 @@
-// app/page.tsx (or wherever your HomePage lives)
+"use client"; 
 
 import Hero from "@/components/home/Hero";
 import KeyBenefits from "@/components/home/KeyBenefits";
@@ -7,34 +7,56 @@ import SafeSecureSection from "@/components/home/SafeSecureSection";
 import TestimonialsSection from "@/components/home/TestimonialsSection";
 import FAQSection from "@/components/home/FAQSection";
 import ContactStrip from "@/components/home/ContactStrip";
-
 import { fetchDynamicHomePage, type DynamicHomePageContent } from "@/lib/api";
-import { Suspense } from "react";
+import { Suspense, useState, useEffect } from "react";
 
-// ✅ Server component – can fetch data
-export default async function HomePage() {
-  let content: DynamicHomePageContent | null = null;
-
+// Client-side version to fetch data dynamically
+const fetchContent = async () => {
   try {
-    // calls GET http://localhost:8000/api/dynamicHomePages/home
-    content = await fetchDynamicHomePage("home");
-  } catch (err) {
-    console.error("Failed to load dynamic home page content:", err);
-    // content stays null → components will use their own static defaults
+    const data = await fetchDynamicHomePage("home");
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch dynamic home page content", error);
+    return null;
+  }
+};
+
+export default function HomePage() {
+  const [content, setContent] = useState<DynamicHomePageContent | null>(null);
+  const [loading, setLoading] = useState(true); // Add loading state
+
+  useEffect(() => {
+    const handleClientSideFetch = () => {
+      if (typeof window !== "undefined") {
+        // Delay to ensure the page has loaded
+        setTimeout(async () => {
+          try {
+            const data = await fetchContent();
+            setContent(data);
+          } catch (error) {
+            console.error("Failed to fetch dynamic home page content", error);
+          } finally {
+            setLoading(false); // Set loading to false after fetching
+          }
+        }, 0); // Optional delay (500ms)
+      }
+    };
+
+    handleClientSideFetch();
+  }, []);
+
+  // If content is still loading, display a loading message
+  if (loading) {
+    return <div>Loading content...</div>;
   }
 
   return (
     <>
-      {/* Each section gets its slice of content, but all props are optional */}
       <Hero data={content?.hero} />
-
       <KeyBenefits data={content?.keyBenefits} />
-
-      {/* services are already dynamic from /services, so keep as-is */}
-      <Suspense fallback={null}>
+      <Suspense fallback={<div>Loading services...</div>}>
         <ServicesSection />
       </Suspense>
-
       <SafeSecureSection data={content?.safeSecure} />
       <TestimonialsSection data={content?.testimonials} />
       <FAQSection data={content?.faq} />

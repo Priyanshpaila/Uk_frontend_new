@@ -2,18 +2,15 @@
 import type { Service } from "./types";
 import { notFound } from "next/navigation";
 
-/* ------------------------------------------------------------------ */
-/*                     ENV + BASE URL HELPERS                         */
-/* ------------------------------------------------------------------ */
-
-const ENV_BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || ""; // e.g. http://localhost:8000/api
-const ENV_BASE_ONLY_URL = process.env.NEXT_PUBLIC_ONLY_URL || ""; // e.g. backend.domain.com/api
-
 // Helper function to check if the host is an IP
 const isIp = (host: string) => /^\d+\.\d+\.\d+\.\d+$/.test(host);
 
 // Helper function to strip protocol (e.g., http:// or https://)
 const stripProtocol = (url: string) => url.replace(/^https?:\/\//, "");
+
+// ENV variables
+const ENV_BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || ""; // e.g. http://localhost:8000/api
+const ENV_BASE_ONLY_URL = process.env.NEXT_PUBLIC_ONLY_URL || ""; // e.g. backend.domain.com/api
 
 /**
  * Returns the backend base URL for the *current tenant*.
@@ -22,10 +19,21 @@ const stripProtocol = (url: string) => url.replace(/^https?:\/\//, "");
  */
 export function getBackendBase(): string {
   if (typeof window === "undefined") {
-    // SSR fallback – no subdomain awareness here
-    return ENV_BASE_URL || "http://localhost:8000/api";
+    // SSR fallback – no subdomain awareness here, but we use protocol dynamically
+    const { protocol, hostname } = new URL(process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:8000/api");
+    const parts = hostname.split(".");
+    const hasSubdomain = parts.length >= 4;
+
+    if (hasSubdomain) {
+      const subdomain = parts[0].toLowerCase();
+      const baseOnly = stripProtocol(ENV_BASE_ONLY_URL || "localhost:8000/api");
+      return `${protocol}//${subdomain}.${baseOnly}`;  // Use dynamic protocol here
+    }
+
+    return `${protocol}//${ENV_BASE_ONLY_URL}`; // Use dynamic protocol for fallback
   }
 
+  // On the client side (browser)
   const { protocol, hostname } = window.location;
 
   // If we're on localhost or an IP, treat as "no subdomain"
@@ -82,6 +90,8 @@ export function getMasterBase(): string {
  * For page slugs etc.
  */
 export const API_BASE = getBackendBase();
+const url = getBackendBase();
+console.log("Backend base URL:", url);
 
 /* ------------------------------------------------------------------ */
 /*                         AUTH HEADER + FETCH                        */
@@ -886,7 +896,7 @@ export async function fetchServiceBySlug(slug: string): Promise<ServiceDetail> {
     status: raw.status ?? "published",
     active: raw.active ?? true,
     view_type: raw.view_type ?? "card",
-    appointment_medium:raw.appointment_medium ?? null,
+    appointment_medium: raw.appointment_medium ?? null,
 
     // backend snake_case
     booking_flow: raw.booking_flow ?? null,
@@ -2283,6 +2293,7 @@ export async function updateAppointmentApi(
 export type DynamicNavbarContent = {
   logoUrl?: string;
   logoAlt?: string;
+  icon?: string;
   searchPlaceholder?: string;
   navLinks?: {
     label: string;
@@ -2332,16 +2343,36 @@ export type DynamicHomePageContent = {
 export async function fetchDynamicHomePage(
   slug: string = "home"
 ): Promise<DynamicHomePageContent> {
-  // uses tenant-aware base: http://tenant.../api
-  return apiFetch<DynamicHomePageContent>(
-    `/dynamicHomePages/${encodeURIComponent(slug)}`,
-    {
-      method: "GET",
-      // don't cache so admin changes show immediately
-      cache: "no-store",
+  const baseUrl = getBackendBase(); // Retrieves the appropriate backend URL
+  console.log("fetch Backend base URL:", baseUrl); // Debugging: Log the backend base URL
+
+  try {
+    // Fetch dynamic content from the backend
+    const response = await fetch(
+      `${baseUrl}/dynamicHomePages/${encodeURIComponent(slug)}`,
+      {
+        method: "GET",
+        cache: "no-store", // Prevents caching, ensures always fresh data
+      }
+    );
+
+    if (!response.ok) {
+      // Log response status and the URL that failed
+      console.error(`Error: ${response.status} - ${response.statusText}`);
+      throw new Error(`Failed to fetch dynamic home page content: ${response.statusText}`);
     }
-  );
+
+    // Parse and return the JSON response
+    return response.json();
+  } catch (error) {
+    // Log the error for debugging
+    console.error("Error fetching dynamic content:", error);
+
+    // Optionally, you could provide a fallback or additional handling here
+    throw error; // Rethrow for handling in page.tsx
+  }
 }
+
 
 /* ------------------------------------------------------------------ */
 /*                             Email send API                         */

@@ -35,10 +35,12 @@ function resolveImageUrlClient(imagePath?: string | null) {
   if (/^https?:\/\//i.test(imagePath)) return imagePath;
 
   const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
+  console.log("Resolving image URL for path:", normalizedPath);
 
   try {
     const baseWithApi = getBackendBase();
     const cleanBase = baseWithApi.replace(/\/api\/?$/, "");
+    console.log("Base URL for media:", `${cleanBase}${normalizedPath}`);
     return `${cleanBase}${normalizedPath}`;
   } catch {
     return normalizedPath;
@@ -123,7 +125,7 @@ export default function Navbar({ data }: NavbarProps) {
   };
 
   // Dynamic bits with fallbacks
-  const logoUrl = data?.logoUrl ?? "/logo.png";
+  const logoUrl = data?.logoUrl ?? "";
   const logoAlt = data?.logoAlt ?? "Pharmacy Express logo";
   const searchPlaceholder =
     data?.searchPlaceholder ??
@@ -136,14 +138,16 @@ export default function Navbar({ data }: NavbarProps) {
     external || href.startsWith("http");
 
   // ✅ SSR-stable logo first, then upgrade after hydration
-  const logoSrcSSR = useMemo(() => resolveImageUrlSSR(logoUrl || "/logo.png"), [logoUrl]);
+  const logoSrcSSR = useMemo(() => resolveImageUrlClient(logoUrl || ""), [logoUrl]);
+  console.log("Navbar logoSrcSSR:", logoSrcSSR);
   const [logoSrc, setLogoSrc] = useState<string>(logoSrcSSR);
 
   useEffect(() => {
     // keep SSR-stable immediately
     setLogoSrc(logoSrcSSR);
+    console.log("Navbar logoSrc:", logoSrc);
     // then upgrade to backend-aware absolute URL (client-only)
-    const upgraded = resolveImageUrlClient(logoUrl || "/logo.png");
+    const upgraded = resolveImageUrlClient(logoUrl || "");
     setLogoSrc(upgraded);
   }, [logoUrl, logoSrcSSR]);
 
@@ -165,6 +169,7 @@ export default function Navbar({ data }: NavbarProps) {
           <a href="/" className="flex items-center gap-2">
             <Image
               src={logoSrc || "/logo.png"}
+              
               alt={logoAlt}
               width={150}
               height={40}

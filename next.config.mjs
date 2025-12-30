@@ -4,27 +4,29 @@ const nextConfig = {
   reactStrictMode: true,
 
   images: {
+    unoptimized: true,
     remotePatterns: [
-      // ⬇️ Local backend (dev)
       {
         protocol: "http",
         hostname: "localhost",
         port: "8000",
         pathname: "/api/assets/**",
       },
-
-      // ⬇️ Root live backend
       {
-        protocol: "https", // use https if your backend is https
+        protocol: "http",
+        hostname: "**.localhost", // Should match any localhost subdomain
+        port: "8000",
+        pathname: "/api/assets/**",
+      },
+      {
+        protocol: "https",
         hostname: "pharma-health.co.uk",
         port: "",
         pathname: "/api/assets/**",
       },
-
-      // ⬇️ Any subdomain like pri.pharma-health.co.uk, abc.pharma-health.co.uk, etc.
       {
         protocol: "https",
-        hostname: "**.pharma-health.co.uk",
+        hostname: "**.pharma-health.co.uk", // Match any subdomain for pharma-health.co.uk
         port: "",
         pathname: "/api/assets/**",
       },

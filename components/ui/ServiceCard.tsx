@@ -43,7 +43,7 @@ export default function ServiceCard({ service }: { service: Service }) {
       {/* Bottom row */}
       <div className="mt-2 flex items-center justify-between gap-3">
         <div className="text-[11px] text-slate-500">
-          Online consultation · Fast booking
+          
         </div>
 
         {/* CTA -> /private-services/[slug] */}
