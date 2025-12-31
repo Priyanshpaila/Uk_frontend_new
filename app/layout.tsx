@@ -57,7 +57,7 @@ export default function RootLayout({
   if (loading || !pageContent) {
     return (
       <html lang="en">
-        <body className={`${inter.className} min-h-screen bg-white flex flex-col`}>
+        <body className={`${inter.className} min-h-screen bg-transparent flex flex-col`}>
           <div>Loading...</div> {/* Display loading state */}
         </body>
       </html>
@@ -66,19 +66,21 @@ export default function RootLayout({
 
   return (
     <html lang="en">
-      <body className={`${inter.className} min-h-screen bg-white flex flex-col`}>
+      <body className={`${inter.className} min-h-screen bg-transparent flex flex-col`}>
         {/* Hardcoded metadata in the <head> */}
-     
 
         <AuthProvider>
           <CartProvider>
-            <Suspense
-              fallback={<div className="h-16 md:h-20 border-b border-slate-200 bg-white/80" />}
-            >
-              <Navbar data={pageContent?.navbar ?? pageContent?.content?.navbar} />
+            <Suspense fallback={<div className="border-b border-slate-200 bg-transparent" />}>
+              {/* Navbar: Make it position absolute so it doesn't take up any height in the flow */}
+              <div className="sticky top-0 z-50 max-w-7xl mx-auto">
+                <Navbar data={pageContent?.navbar ?? pageContent?.content?.navbar} />
+              </div>
             </Suspense>
 
-            <main className="flex-1">{children}</main>
+            <main className="flex-1 "> {/* Adjusted padding-top for content behind navbar */}
+              {children}
+            </main>
 
             <Footer data={pageContent?.footer ?? pageContent?.content?.footer} />
             <Toaster position="top-right" />

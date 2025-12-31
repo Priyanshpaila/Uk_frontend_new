@@ -21,3 +21,9 @@ html, body {
 ::-webkit-scrollbar-thumb {
   @apply bg-slate-400 rounded-full;
 }
+
+@layer utilities {
+  .shadow-glow {
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3), 0 0 15px rgba(0, 255, 255, 0.3);
+  }
+}

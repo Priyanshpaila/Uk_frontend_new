@@ -158,205 +158,210 @@ export default function Navbar({ data }: NavbarProps) {
   ).toUpperCase();
 
   return (
-    <header className="sticky top-0 z-40 border-b border-slate-200 bg-white/80 backdrop-blur-xl">
-      <Container>
-        <div className="flex h-16 items-center justify-between gap-3 md:h-20">
-          {/* Logo */}
-          <a href="/" className="flex items-center gap-2">
-            <Image
-              src={logoSrc || "/logo.png"}
-              
-              alt={logoAlt}
-              width={150}
-              height={40}
-              className="h-8 w-auto md:h-9"
-              priority
-            />
-          </a>
+<header className="sticky top-0 z-40 py-3  bg-transparent">
+  <Container>
+    <div className="flex items-center justify-between gap-3 md:h-20 py-1 px-6 bg-white/30 shadow-2xl rounded-full max-w-7xl mx-auto backdrop-blur-2xl border border-transparent ">
+      {/* Logo */}
+      <a href="/" className="flex items-center gap-2">
+        <Image
+          src={logoSrc || "/logo.png"}
+          alt={logoAlt}
+          width={150}
+          height={40}
+          className="h-8 w-auto md:h-9"
+          priority
+        />
+      </a>
 
-          {/* Search (desktop) */}
-          <div className="hidden flex-1 items-center md:flex">
-            <form onSubmit={onSearchSubmit} className="relative w-full max-w-xl">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <input
-                type="search"
-                value={searchValue}
-                onChange={(e) => onSearchChange(e.target.value)}
-                placeholder={searchPlaceholder}
-                className="w-full rounded-full border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-xs text-slate-800 placeholder:text-slate-400 focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-cyan-100"
-              />
-            </form>
-          </div>
+      {/* Search (desktop) */}
+      <div className="hidden flex-1 items-center md:flex">
+        <form onSubmit={onSearchSubmit} className="relative w-full max-w-xl">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+          <input
+            type="search"
+            value={searchValue}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder={searchPlaceholder}
+            className="w-full rounded-full border-none py-2 pl-9 pr-4 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-300"
+          />
+        </form>
+      </div>
 
-          {/* Right controls */}
-          <div className="flex items-center gap-2 md:gap-3">
-            {/* Desktop nav */}
-            <nav className="hidden items-center gap-4 text-xs font-medium text-slate-700 lg:flex">
-              {links.map((item) => {
-                const external = isExternal(item.href, item.external);
-                return (
-                  <a
-                    key={item.label}
-                    href={item.href}
-                    target={external ? "_blank" : undefined}
-                    rel={external ? "noreferrer" : undefined}
-                    className="inline-flex items-center gap-1 transition hover:text-cyan-700"
-                  >
-                    {item.label}
-                  </a>
-                );
-              })}
-            </nav>
-
-            {/* Cart button (safe: CartButton already guards sheet/badge) */}
-            <CartButton />
-
-            {/* Desktop account: SSR-stable (shows Log in until hydrated) */}
-            {!effectiveUser ? (
-              <button
-                type="button"
-                onClick={() => router.push("/login")}
-                className="hidden rounded-full bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 md:inline-block"
+      {/* Right controls */}
+      <div className="flex items-center gap-2 md:gap-3">
+        {/* Desktop nav */}
+        <nav className="hidden items-center gap-4 text-xs font-medium text-slate-800 lg:flex">
+          {links.map((item) => {
+            const external = isExternal(item.href, item.external);
+            return (
+              <a
+                key={item.label}
+                href={item.href}
+                target={external ? "_blank" : undefined}
+                rel={external ? "noreferrer" : undefined}
+                className="inline-flex items-center gap-1 rounded-full border-2 border-transparent px-3 py-2 transition  hover:text-cyan-400 "
               >
-                Log in
-              </button>
-            ) : (
-              <div className="relative hidden md:block">
-                <button
-                  type="button"
-                  onClick={() => setAccountOpen((v) => !v)}
-                  className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-800 hover:border-cyan-400 hover:bg-cyan-50"
-                >
-                  <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500 text-[11px] font-semibold text-white">
-                    {userInitial}
-                  </span>
-                  <span className="hidden max-w-[120px] truncate sm:inline-block">
-                    {effectiveUser?.firstName || effectiveUser?.email || "My account"}
-                  </span>
-                </button>
+                {item.label}
+              </a>
+            );
+          })}
+        </nav>
 
-                {accountOpen && (
-                  <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-slate-200 bg-white p-2 text-xs text-slate-700 shadow-soft-card">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAccountOpen(false);
-                        router.push("/profile");
-                      }}
-                      className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left hover:bg-slate-50"
-                    >
-                      <User className="h-4 w-4 text-slate-500" />
-                      <span>My profile</span>
-                    </button>
+        {/* Cart button */}
+        <CartButton />
 
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setAccountOpen(false);
-                        router.push("/profile?tab=orders");
-                      }}
-                      className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left hover:bg-slate-50"
-                    >
-                      <Package className="h-4 w-4 text-slate-500" />
-                      <span>My orders</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={handleLogout}
-                      className="mt-1 w-full rounded-xl px-2 py-2 text-left text-rose-600 hover:bg-rose-50"
-                    >
-                      Log out
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* Mobile menu button */}
+        {/* Desktop account */}
+        {!effectiveUser ? (
+          <button
+            type="button"
+            onClick={() => router.push("/login")}
+            className="hidden rounded-full bg-slate-900 px-4 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 md:inline-block"
+          >
+            Log in
+          </button>
+        ) : (
+          <div className="relative hidden md:block">
             <button
               type="button"
-              className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white p-1.5 text-slate-700 md:hidden"
-              onClick={() => setOpen((v) => !v)}
+              onClick={() => setAccountOpen((v) => !v)}
+              className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-800 hover:border-cyan-400 hover:bg-cyan-50"
             >
-              {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500 text-[11px] font-semibold text-white">
+                {userInitial}
+              </span>
+              <span className="hidden max-w-[120px] truncate sm:inline-block">
+                {effectiveUser?.firstName || effectiveUser?.email || "My account"}
+              </span>
             </button>
-          </div>
-        </div>
 
-        {/* Search + nav mobile */}
-        {open && (
-          <div className="pb-4 md:hidden">
-            <div className="mb-3">
-              <form onSubmit={onSearchSubmit} className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                <input
-                  type="search"
-                  value={searchValue}
-                  onChange={(e) => onSearchChange(e.target.value)}
-                  placeholder={searchPlaceholder || "Search for treatments"}
-                  className="w-full rounded-full border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-xs text-slate-800 placeholder:text-slate-400 focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-cyan-100"
-                />
-              </form>
-            </div>
-
-            <nav className="flex flex-col gap-1 rounded-3xl border border-slate-200 bg-white p-3 text-sm text-slate-700 shadow-soft-card">
-              {links.map((item) => {
-                const external = isExternal(item.href, item.external);
-                return (
-                  <a
-                    key={item.label}
-                    href={item.href}
-                    target={external ? "_blank" : undefined}
-                    rel={external ? "noreferrer" : undefined}
-                    className="rounded-2xl px-2 py-2 hover:bg-slate-50"
-                    onClick={() => setOpen(false)}
-                  >
-                    {item.label}
-                  </a>
-                );
-              })}
-
-              {/* Mobile account actions (SSR-stable via effectiveUser) */}
-              {!effectiveUser ? (
+            {accountOpen && (
+              <div className="absolute right-0 mt-2 w-44 rounded-2xl border border-slate-200 bg-white p-2 text-xs text-slate-700 shadow-soft-card">
                 <button
                   type="button"
-                  className="mt-2 w-full rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
                   onClick={() => {
-                    setOpen(false);
-                    router.push("/login");
+                    setAccountOpen(false);
+                    router.push("/profile");
                   }}
+                  className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left hover:bg-slate-50"
                 >
-                  Log in
+                  <User className="h-4 w-4 text-slate-500" />
+                  <span>My profile</span>
                 </button>
-              ) : (
-                <div className="mt-3 flex flex-col gap-1 text-xs">
-                  <button
-                    type="button"
-                    className="w-full rounded-2xl px-3 py-2 text-left hover:bg-slate-50"
-                    onClick={() => {
-                      setOpen(false);
-                      router.push("/profile");
-                    }}
-                  >
-                    My profile
-                  </button>
-                  <button
-                    type="button"
-                    className="w-full rounded-2xl px-3 py-2 text-left text-rose-600 hover:bg-rose-50"
-                    onClick={() => {
-                      setOpen(false);
-                      handleLogout();
-                    }}
-                  >
-                    Log out
-                  </button>
-                </div>
-              )}
-            </nav>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountOpen(false);
+                    router.push("/profile?tab=orders");
+                  }}
+                  className="flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left hover:bg-slate-50"
+                >
+                  <Package className="h-4 w-4 text-slate-500" />
+                  <span>My orders</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleLogout}
+                  className="mt-1 w-full rounded-xl px-2 py-2 text-left text-rose-600 hover:bg-rose-50"
+                >
+                  Log out
+                </button>
+              </div>
+            )}
           </div>
         )}
-      </Container>
-    </header>
+
+        {/* Mobile menu button */}
+        <button
+          type="button"
+          className="inline-flex items-center justify-center rounded-full border border-slate-200 bg-white p-1.5 text-slate-700 md:hidden"
+          onClick={() => setOpen((v) => !v)}
+        >
+          {open ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+        </button>
+      </div>
+    </div>
+
+    {/* Mobile search + nav */}
+    {open && (
+      <div className="pb-4 md:hidden">
+        <div className="mb-3">
+          <form onSubmit={onSearchSubmit} className="relative">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              value={searchValue}
+              onChange={(e) => onSearchChange(e.target.value)}
+              placeholder={searchPlaceholder || "Search for treatments"}
+              className="w-full rounded-full border border-slate-200 bg-slate-50 py-2 pl-9 pr-4 text-xs text-slate-800 placeholder:text-slate-400 focus:border-cyan-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-cyan-100"
+            />
+          </form>
+        </div>
+
+        <nav className="flex flex-col gap-1 rounded-3xl border border-slate-200 bg-white p-3 text-sm text-slate-700 shadow-soft-card">
+          {links.map((item) => {
+            const external = isExternal(item.href, item.external);
+            return (
+              <a
+                key={item.label}
+                href={item.href}
+                target={external ? "_blank" : undefined}
+                rel={external ? "noreferrer" : undefined}
+                className="rounded-2xl px-2 py-2 hover:bg-slate-50"
+                onClick={() => setOpen(false)}
+              >
+                {item.label}
+              </a>
+            );
+          })}
+
+          {/* Mobile account actions */}
+          {!effectiveUser ? (
+            <button
+              type="button"
+              className="mt-2 w-full rounded-full bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
+              onClick={() => {
+                setOpen(false);
+                router.push("/login");
+              }}
+            >
+              Log in
+            </button>
+          ) : (
+            <div className="mt-3 flex flex-col gap-1 text-xs">
+              <button
+                type="button"
+                className="w-full rounded-2xl px-3 py-2 text-left hover:bg-slate-50"
+                onClick={() => {
+                  setOpen(false);
+                  router.push("/profile");
+                }}
+              >
+                My profile
+              </button>
+              <button
+                type="button"
+                className="w-full rounded-2xl px-3 py-2 text-left text-rose-600 hover:bg-rose-50"
+                onClick={() => {
+                  setOpen(false);
+                  handleLogout();
+                }}
+              >
+                Log out
+              </button>
+            </div>
+          )}
+        </nav>
+      </div>
+    )}
+  </Container>
+</header>
+
+
+
+
+
+
   );
 }
