@@ -43,7 +43,6 @@ export default function RootLayout({
     async function fetchContent() {
       try {
         const content = await fetchDynamicHomePage("home");
-        console.log("Page Content for Navbar and Footer:", content);
         setPageContent(content);
       } catch (error) {
         console.error("Error fetching dynamic content:", error);

@@ -90,8 +90,7 @@ export function getMasterBase(): string {
  * For page slugs etc.
  */
 export const API_BASE = getBackendBase();
-const url = getBackendBase();
-console.log("Backend base URL:", url);
+
 
 /* ------------------------------------------------------------------ */
 /*                         AUTH HEADER + FETCH                        */
@@ -2343,8 +2342,7 @@ export type DynamicHomePageContent = {
 export async function fetchDynamicHomePage(
   slug: string = "home"
 ): Promise<DynamicHomePageContent> {
-  const baseUrl = getBackendBase(); // Retrieves the appropriate backend URL
-  console.log("fetch Backend base URL:", baseUrl); // Debugging: Log the backend base URL
+  const baseUrl = getBackendBase(); // Debugging: Log the backend base URL
 
   try {
     // Fetch dynamic content from the backend

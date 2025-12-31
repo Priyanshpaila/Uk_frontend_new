@@ -35,12 +35,10 @@ function resolveImageUrlClient(imagePath?: string | null) {
   if (/^https?:\/\//i.test(imagePath)) return imagePath;
 
   const normalizedPath = imagePath.startsWith("/") ? imagePath : `/${imagePath}`;
-  console.log("Resolving image URL for path:", normalizedPath);
 
   try {
     const baseWithApi = getBackendBase();
     const cleanBase = baseWithApi.replace(/\/api\/?$/, "");
-    console.log("Base URL for media:", `${cleanBase}${normalizedPath}`);
     return `${cleanBase}${normalizedPath}`;
   } catch {
     return normalizedPath;
@@ -139,13 +137,11 @@ export default function Navbar({ data }: NavbarProps) {
 
   // ✅ SSR-stable logo first, then upgrade after hydration
   const logoSrcSSR = useMemo(() => resolveImageUrlClient(logoUrl || ""), [logoUrl]);
-  console.log("Navbar logoSrcSSR:", logoSrcSSR);
   const [logoSrc, setLogoSrc] = useState<string>(logoSrcSSR);
 
   useEffect(() => {
     // keep SSR-stable immediately
     setLogoSrc(logoSrcSSR);
-    console.log("Navbar logoSrc:", logoSrc);
     // then upgrade to backend-aware absolute URL (client-only)
     const upgraded = resolveImageUrlClient(logoUrl || "");
     setLogoSrc(upgraded);
