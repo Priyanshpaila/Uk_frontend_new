@@ -448,64 +448,11 @@ export default async function ServiceLanding({
 
   return (
     <main className="bg-slate-50">
-      {/* HERO – styled similarly to NHS services page */}
-      <section className="relative border-b border-emerald-100/70 bg-gradient-to-b from-emerald-50/70 via-white to-emerald-50/30">
-        {hasBg && (
-          <div className="pointer-events-none absolute inset-0">
-            <Image
-              src={resolvedBgUrl}
-              alt={page.title || ""}
-              fill
-              priority={false}
-              sizes="100vw"
-              className="object-cover opacity-70"
-            />
-            <div
-              className="absolute inset-0 bg-slate-900"
-              style={{ opacity: overlayPct / 100, mixBlendMode: "multiply" }}
-            />
-          </div>
-        )}
-
-        <div className="relative">
-          <Container>
-            <div className="py-8 md:py-12 lg:py-16">
-              <div
-                className={`mx-auto max-w-5xl rounded-3xl border border-emerald-100/70 bg-white/85 ${blurCls} px-5 py-6 shadow-soft-card ring-1 ring-slate-900/5 md:px-8 md:py-8`}
-              >
-                {/* Top pill */}
-                {/* <div className="inline-flex items-center gap-2 rounded-full bg-emerald-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-800">
-                  <span className="h-1 w-1 rounded-full bg-emerald-700" />
-                  <span>Pharmacy Express</span>
-                </div> */}
-
-                {/* Title intentionally left dynamic / handled by content if needed */}
-
-                {/* Icon chips – iconic feel like NHS page */}
-                <div className="mt-4 flex flex-wrap gap-3 text-[11px] text-slate-500">
-                  <span className="inline-flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 shadow-sm ring-1 ring-slate-100">
-                    <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-                    GPhC-registered UK pharmacy
-                  </span>
-                  <span className="inline-flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 shadow-sm ring-1 ring-slate-100">
-                    <Truck className="h-3.5 w-3.5 text-emerald-500" />
-                    Fast, discreet delivery
-                  </span>
-                  <span className="inline-flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 shadow-sm ring-1 ring-slate-100">
-                    <MessageCircle className="h-3.5 w-3.5 text-emerald-500" />
-                    Online clinician support
-                  </span>
-                </div>
-              </div>
-            </div>
-          </Container>
-        </div>
-      </section>
 
       {/* MAIN CONTENT – dynamic rendered HTML inside a card */}
       <section className="border-b border-slate-200 bg-white/95 py-8 md:py-12">
         <Container>
-          <div className="mx-auto max-w-5xl rounded-3xl border border-slate-200/80 bg-white/95 px-5 py-6 shadow-soft-card md:px-8 md:py-8">
+          <div className="mx-auto max-w-5xl rounded-2xl border border-slate-200/80 bg-white/95 px-5 py-6 shadow-soft-card md:px-8 md:py-8">
             <RichContent html={html} />
           </div>
         </Container>
