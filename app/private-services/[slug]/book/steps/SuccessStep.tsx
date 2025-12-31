@@ -17,6 +17,8 @@ import {
   getOrderByIdApi,
   type LastPaymentItem,
   type OrderDto,
+  fetchDynamicHomePage,
+  DynamicHomePageContent,
 } from "@/lib/api";
 
 type SummaryRow = { label: string; value: string };
@@ -253,6 +255,16 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
 
   const [cleared, setCleared] = useState(false);
   const clearingRef = useRef(false);
+  const [data, setData] = useState<DynamicHomePageContent | null>(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      const fetchedData = await fetchDynamicHomePage("home");
+      setData(fetchedData); // Store fetched data
+    };
+
+    fetchData();
+  }, []);
 
   // ---- Reference from URL or last_payment (baseline) ----
   const ref = useMemo(() => {
@@ -1021,11 +1033,10 @@ export default function SuccessStep({ serviceSlug }: SuccessStepProps) {
                 Provider
               </p>
               <p className="mt-1 text-sm font-semibold text-slate-900 md:text-base">
-                Pharmacy Express
+                {data?.navbar?.logoAlt || "Pharmacy Express"}{" "}
+                {/* Use logoAlt if available, else fallback to "Pharmacy Express" */}
               </p>
-              <p className="text-xs text-slate-600 md:text-sm">
-                Private Clinic &amp; Online Pharmacy
-              </p>
+
               {serviceDisplay && (
                 <p className="mt-1 text-xs text-slate-500">
                   Service:{" "}
