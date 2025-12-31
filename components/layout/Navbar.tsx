@@ -160,9 +160,9 @@ export default function Navbar({ data }: NavbarProps) {
   return (
 <header className="sticky top-0 z-40 py-3  bg-transparent">
   <Container>
-    <div className="flex items-center justify-between gap-3 md:h-20 py-1 px-6 bg-white/30 shadow-2xl rounded-full max-w-7xl mx-auto backdrop-blur-2xl border border-transparent ">
+    <div className="flex items-center justify-evenly gap-3 md:h-20 py-1 px-14 bg-white/30 shadow-2xl rounded-full max-w-screen-xl mx-auto backdrop-blur-2xl border border-transparent ">
       {/* Logo */}
-      <a href="/" className="flex items-center gap-2">
+      <a href="/" className="flex items-center gap-1">
         <Image
           src={logoSrc || "/logo.png"}
           alt={logoAlt}

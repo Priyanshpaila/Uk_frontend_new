@@ -108,7 +108,7 @@ export default function Hero({ data }: { data?: HeroData }) {
     ];
 
   return (
-    <section className="relative isolate overflow-hidden">
+    <section className="relative isolate overflow-hidden pt-16">
       {/* Background image */}
       <div className="absolute inset-0">
         <Image
