@@ -75,7 +75,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <section className="bg-pharmacy-bg py-10 md:py-14">
+    <section className="bg-pharmacy-bg py-10 mt-28 md:py-14">
       <Container>
         <div className="mx-auto max-w-2xl rounded-3xl border border-slate-200 bg-white p-6 shadow-soft-card md:p-8">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">

@@ -450,7 +450,7 @@ export default async function ServiceLanding({
     <main className="bg-slate-50">
 
       {/* MAIN CONTENT – dynamic rendered HTML inside a card */}
-      <section className="border-b border-slate-200 bg-white/95 py-8 md:py-12">
+      <section className="border-b border-slate-200 bg-white/95 py-8 mt-28 md:py-12">
         <Container>
           <div className="mx-auto max-w-5xl rounded-2xl border border-slate-200/80 bg-white/95 px-5 py-6 shadow-soft-card md:px-8 md:py-8">
             <RichContent html={html} />

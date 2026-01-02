@@ -59,7 +59,7 @@ export default function ProfilePageClient() {
       : "Your profile";
 
   return (
-    <section className="bg-pharmacy-bg py-10 md:py-14 min-h-full">
+    <section className="bg-pharmacy-bg py-10 md:py-14 mt-28 min-h-full">
       <Container>
         <div className="mx-auto max-w-3xl rounded-3xl border border-slate-200 bg-white p-5 text-xs text-slate-700 shadow-soft-card md:p-7 md:text-sm">
           {/* Header */}

@@ -794,7 +794,7 @@ export default function BookServicePage() {
     (currentStep === "login" && !isLoggedIn);
 
   return (
-    <main className="min-h-screen bg-pharmacy-bg py-6 md:py-10">
+    <main className="min-h-screen bg-pharmacy-bg py-6 mt-28 md:py-10">
       <Container>
         <div className="mx-auto max-w-5xl">
           <div className="mb-4 flex items-center justify-between gap-3">

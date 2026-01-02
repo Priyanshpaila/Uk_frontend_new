@@ -160,7 +160,7 @@ export default function Navbar({ data }: NavbarProps) {
   return (
 <header className="sticky top-0 z-40 py-3  bg-transparent">
   <Container>
-    <div className="flex items-center justify-evenly gap-3 md:h-20 py-1 px-14 bg-white/30 shadow-2xl rounded-full max-w-screen-xl mx-auto backdrop-blur-2xl border border-transparent ">
+    <div className="flex items-center justify-evenly gap-3 md:h-20 py-1 px-14 bg-white/60 shadow-2xl rounded-full max-w-screen-xl mx-auto backdrop-blur-2xl border border-transparent ">
       {/* Logo */}
       <a href="/" className="flex items-center gap-1">
         <Image
@@ -181,8 +181,8 @@ export default function Navbar({ data }: NavbarProps) {
             type="search"
             value={searchValue}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder={searchPlaceholder}
-            className="w-full rounded-full border-none py-2 pl-9 pr-4 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-300"
+            placeholder="Search"
+            className="w-full rounded-full border border-slate-200 py-2 pl-9 pr-4 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-300"
           />
         </form>
       </div>
