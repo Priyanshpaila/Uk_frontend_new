@@ -19,18 +19,8 @@ const ENV_BASE_ONLY_URL = process.env.NEXT_PUBLIC_ONLY_URL || ""; // e.g. backen
  */
 export function getBackendBase(): string {
   if (typeof window === "undefined") {
-    // SSR fallback – no subdomain awareness here, but we use protocol dynamically
-    const { protocol, hostname } = new URL(process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:8000/api");
-    const parts = hostname.split(".");
-    const hasSubdomain = parts.length >= 4;
-
-    if (hasSubdomain) {
-      const subdomain = parts[0].toLowerCase();
-      const baseOnly = stripProtocol(ENV_BASE_ONLY_URL || "localhost:8000/api");
-      return `${protocol}//${subdomain}.${baseOnly}`;  // Use dynamic protocol here
-    }
-
-    return `${protocol}//${ENV_BASE_ONLY_URL}`; // Use dynamic protocol for fallback
+    // SSR safety fallback
+    return ENV_BASE_URL || "http://localhost:8000/api";
   }
 
   // On the client side (browser)
@@ -45,7 +35,7 @@ export function getBackendBase(): string {
   const parts = hostname.split(".");
 
   // For this project you want length >= 2 to count as "has subdomain"
-  const hasSubdomain = parts.length >= 4;
+  const hasSubdomain = parts.length >= 6;
 
   if (!hasSubdomain) {
     return resolveBaseForNoSubdomain(protocol);
