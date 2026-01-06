@@ -631,9 +631,10 @@ const paymentOdrId = useMemo(() => orderId ?? "default_order_id", [orderId]);
       try {
         setInitialising(true);
         setError(null);
+        const totalAmountInMinorUnits = totals.totalMinor;
 
         const secret = await createRyftSessionApi({
-          amountMinor: totals.totalMinor,
+          amountMinor: totalAmountInMinorUnits,
           currency: process.env.NEXT_PUBLIC_CONSULTATION_CURRENCY || "GBP",
           order_id: paymentOdrId,
           description: "Clinic payment",
