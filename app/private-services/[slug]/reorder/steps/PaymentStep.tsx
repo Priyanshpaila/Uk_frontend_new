@@ -32,6 +32,7 @@ import {
   type LastPaymentPayload,
   type LastPaymentItem,
   type OrderDto,
+  fetchDynamicHomePage,
 } from "@/lib/api";
 import Lottie from "react-lottie";
 import paymentAnimation from "@/assets/pay.json";
@@ -352,11 +353,15 @@ async function sendInvoiceEmailForOrder(
     const email = order.email || "";
     if (!email) return;
 
+    const data = await fetchDynamicHomePage("home");
+
     const serviceName =
       order.service_name ||
       (slug || payment.slug || "")
         .replace(/[-_]+/g, " ")
         .replace(/\b\w/g, (c) => c.toUpperCase());
+
+
 
     const appointmentAt =
       order.start_at ||
@@ -373,8 +378,8 @@ async function sendInvoiceEmailForOrder(
       process.env.NEXT_PUBLIC_LOGIN_URL ||
       process.env.NEXT_PUBLIC_APP_URL ||
       "https://safescript.co.uk";
-    const supportEmail =
-      process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "support@safescript.co.uk";
+    const supportEmail =data?.navbar?.supportEmail|| "support@safescript.co.uk";
+    const companyName = data?.navbar?.companyName||"Pharmacy Express";
 
     const subject = `Payment successful - Ref ${ref}`;
 
@@ -391,6 +396,7 @@ async function sendInvoiceEmailForOrder(
         appointmentAt,
         loginUrl,
         supportEmail,
+        companyName,
         year: new Date().getFullYear().toString(),
       },
     });
