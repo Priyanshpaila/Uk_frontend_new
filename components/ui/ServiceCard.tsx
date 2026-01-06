@@ -43,7 +43,16 @@ export default function ServiceCard({ service }: { service: Service }) {
       {/* Bottom row */}
       <div className="mt-2 flex items-center justify-between gap-3">
         <div className="text-[11px] text-slate-500">
-          
+                <span
+        className={`inline-block px-2 py-1 rounded-full text-xs font-normal 
+        ${
+          service.appointmentMedium === "online"
+            ? "bg-green-100 text-green-600"
+            : "bg-yellow-100 text-yellow-600"
+        }`}
+      >
+        {service.appointmentMedium === "online" ? "Online" : "Offline"}
+      </span>
         </div>
 
         {/* CTA -> /private-services/[slug] */}

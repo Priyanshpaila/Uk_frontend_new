@@ -6,10 +6,10 @@ import { Metadata } from "next";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Netherton Chemist",
+  title: "Middlestown Pharmacy",
   description: "Pharmacy",
   icons: {
-    icon: "/1.png",
+    icon: "/icon.png",
   },
 };
 

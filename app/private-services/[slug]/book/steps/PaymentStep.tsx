@@ -33,6 +33,8 @@ import {
   type LastPaymentItem,
   type OrderDto,
 } from "@/lib/api";
+import Lottie from "react-lottie";
+import paymentAnimation from "@/assets/pay.json";
 
 type PaymentStepProps = {
   serviceSlug?: string;
@@ -440,6 +442,7 @@ export default function PaymentStep({ serviceSlug, goToSuccessStep }: PaymentSte
   }, [appointmentAtIso]);
 
   const [orderId, setOrderId] = useState<string | null>(null);
+  console.log("PaymentStep: effectiveSlug=", effectiveSlug, " orderId=", orderId);
   const [orderInitError, setOrderInitError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -531,6 +534,9 @@ export default function PaymentStep({ serviceSlug, goToSuccessStep }: PaymentSte
   }, [orderId]);
 
   const paymentRef = useMemo(() => orderReference || orderId || "ORDER", [orderReference, orderId]);
+const paymentOdrId = useMemo(() => orderId ?? "default_order_id", [orderId]);
+
+
 
   const buildLastPayment = () =>
     buildLastPaymentPayload(paymentRef, totals, effectiveSlug, appointmentAtIso);
@@ -629,7 +635,7 @@ export default function PaymentStep({ serviceSlug, goToSuccessStep }: PaymentSte
         const secret = await createRyftSessionApi({
           amountMinor: totals.totalMinor,
           currency: process.env.NEXT_PUBLIC_CONSULTATION_CURRENCY || "GBP",
-          reference: paymentRef,
+          order_id: paymentOdrId,
           description: "Clinic payment",
         });
 
@@ -688,27 +694,43 @@ export default function PaymentStep({ serviceSlug, goToSuccessStep }: PaymentSte
     };
   }, [totals.totalMinor, showPay, paymentRef]);
 
-  if (!totals.lines.length) {
-    return (
-      <div className="mx-auto max-w-3xl rounded-3xl border border-slate-200 bg-white/80 p-8 text-center shadow-lg shadow-slate-200/70">
-        <h2 className="text-2xl font-semibold text-slate-900">Payment</h2>
-        {appointmentAtPretty ? (
-          <div className="mx-auto mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-1.5 text-xs font-medium text-emerald-900">
-            Appointment {appointmentAtPretty}
-          </div>
-        ) : null}
-        <p className="mt-4 text-sm text-slate-500">Your basket is currently empty.</p>
-        <div className="mt-6 flex justify-center">
-          <Link
-            href={`/private-services/${effectiveSlug}/book?step=treatments`}
-            className="inline-flex items-center justify-center rounded-full border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-900 hover:bg-slate-50"
-          >
-            Back to treatments
-          </Link>
-        </div>
+if (!totals.lines.length) {
+  return (
+    <div className="mx-auto max-w-3xl rounded-3xl border border-slate-200 bg-white/80 p-8 text-center shadow-lg shadow-slate-200/70">
+      <h2 className="text-2xl font-semibold text-slate-900">Payment</h2>
+
+      {/* Lottie Animation for empty basket */}
+      <div className="my-8">
+        <Lottie
+          options={{
+            animationData: paymentAnimation,
+            loop: true,
+            autoplay: true, // Starts the animation immediately
+          }}
+          height={200}
+          width={200}
+        />
       </div>
-    );
-  }
+
+      {/* {appointmentAtPretty ? (
+        <div className="mx-auto mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-4 py-1.5 text-xs font-medium text-emerald-900">
+          Appointment {appointmentAtPretty}
+        </div>
+      ) : null} */}
+
+      {/* <p className="mt-4 text-sm text-slate-500">Your basket is currently empty.</p> */}
+
+      {/* <div className="mt-6 flex justify-center">
+        <Link
+          href={`/private-services/${effectiveSlug}/book?step=treatments`}
+          className="inline-flex items-center justify-center rounded-full border border-slate-300 bg-white px-5 py-2.5 text-sm font-medium text-slate-900 hover:bg-slate-50"
+        >
+          Back to treatments
+        </Link>
+      </div> */}
+    </div>
+  );
+}
 
   return (
     <div className="mx-auto max-w-4xl rounded-3xl border border-slate-200 bg-white/80 p-6 shadow-xl shadow-slate-200/70 backdrop-blur">
@@ -718,8 +740,7 @@ export default function PaymentStep({ serviceSlug, goToSuccessStep }: PaymentSte
         <div>
           <h2 className="mt-1 text-2xl font-semibold text-slate-900">Payment</h2>
           <p className="mt-1 text-xs sm:text-sm text-slate-500">
-            Securely complete your booking. We’ll email your receipt and invoice
-            as soon as the payment is confirmed.
+            Securely complete your booking.
           </p>
         </div>
         <div className="flex flex-col items-end gap-2 text-right">

@@ -6,7 +6,7 @@ import toast from "react-hot-toast";
 import Container from "@/components/ui/Container";
 import ServiceCard from "@/components/ui/ServiceCard";
 import SkeletonCard from "@/components/ui/SkeletonCard";
-import { fetchServices } from "@/lib/api";
+import { fetchHomePageServices } from "@/lib/api";
 import type { Service } from "@/lib/types";
 
 function serviceMatchesQuery(service: Service, q: string) {
@@ -48,7 +48,7 @@ export default function ServicesSection() {
       setLoading(true);
       setErrorMsg(null);
       try {
-        const data = await fetchServices();
+        const data = await fetchHomePageServices();
         if (!cancelled) {
           setServices(data || []);
           if (!data || data.length === 0) {

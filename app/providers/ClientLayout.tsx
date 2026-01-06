@@ -10,6 +10,8 @@ import {
   fetchDynamicHomePage,
   type DynamicHomePageContent,
 } from "@/lib/api";
+import Lottie from "react-lottie";
+import animationData from "@/assets/loader.json";
 
 export default function ClientLayout({
   children,
@@ -37,7 +39,16 @@ export default function ClientLayout({
   if (loading || !pageContent) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        Loading...
+        {/* Lottie Loader */}
+        <Lottie
+          options={{
+            animationData: animationData,
+            loop: true,
+            autoplay: true,
+          }}
+          height={150}
+          width={150}
+        />
       </div>
     );
   }

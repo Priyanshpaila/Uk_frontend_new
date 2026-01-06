@@ -35,7 +35,7 @@ export function getBackendBase(): string {
   const parts = hostname.split(".");
 
   // For this project you want length >= 2 to count as "has subdomain"
-  const hasSubdomain = parts.length >= 6;
+  const hasSubdomain = parts.length >= 4;
 
   if (!hasSubdomain) {
     return resolveBaseForNoSubdomain(protocol);
@@ -80,7 +80,6 @@ export function getMasterBase(): string {
  * For page slugs etc.
  */
 export const API_BASE = getBackendBase();
-
 
 /* ------------------------------------------------------------------ */
 /*                         AUTH HEADER + FETCH                        */
@@ -308,15 +307,84 @@ export async function fetchServices(): Promise<Service[]> {
     id: item._id,
     name: item.name,
     slug: item.slug,
-    description:
-      item.description ||
-      "This service is available at Pharmacy Express. Learn more.",
+    description: item.description || "This service is available. Learn more.",
     ctaText: item.cta_text || "Book now",
     image: buildServiceImageUrl(item.image),
     status: item.status ?? "published",
     active: item.active ?? true,
     viewType: item.view_type ?? "card",
+
+    // New fields added to match the Service type
+    appointmentMedium: item.appointment_medium || "offline", // default to "offline" if not provided
+    bookingFlow: item.booking_flow || "{}",
+    reorderFlow: item.reorder_flow || "{}",
+    formsAssignment: item.forms_assignment || "{}",
+    createdAt: item.createdAt || new Date().toISOString(),
+    updatedAt: item.updatedAt || new Date().toISOString(),
   }));
+}
+
+type HomePageServicesResponse = {
+  _id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  cta_text?: string;
+  image?: string;
+  status?: string;
+  active?: boolean;
+  view_type?: string;
+  appointment_medium?: string; // Could be "online" | "offline"
+  booking_flow: string;
+  reorder_flow: string;
+  forms_assignment: string;
+  showInHomePage: boolean;
+  createdAt: string;
+  updatedAt: string;
+  [key: string]: any;
+};
+
+/**
+ * Fetch services for the home page from `/api/services/homePageServices`.
+ */
+export async function fetchHomePageServices(): Promise<Service[]> {
+  const base = getBackendBase(); // Get the backend base URL dynamically
+  const endpoint = "/services/homePageServices"; // Endpoint for fetching services
+
+  try {
+    const raw = await jsonFetch<HomePageServicesResponse[]>(
+      `${base}${endpoint}`
+    );
+
+    return raw.map((item) => ({
+      id: item._id,
+      name: item.name,
+      slug: item.slug,
+      description: item.description || "This service is available. Learn more.",
+      ctaText: item.cta_text || "Book now",
+      image: buildServiceImageUrl(item.image),
+      status: item.status ?? "published",
+      active: item.active ?? true,
+      viewType: item.view_type ?? "card",
+
+      // Ensure appointmentMedium is typed correctly
+      appointmentMedium:
+        item.appointment_medium === "online" ||
+        item.appointment_medium === "offline"
+          ? item.appointment_medium
+          : "offline", // Default to "offline" if not "online"
+
+      bookingFlow: item.booking_flow || "{}",
+      reorderFlow: item.reorder_flow || "{}",
+      formsAssignment: item.forms_assignment || "{}",
+      createdAt: item.createdAt || new Date().toISOString(),
+      updatedAt: item.updatedAt || new Date().toISOString(),
+      showInHomePage: item.showInHomePage ?? false,
+    }));
+  } catch (error) {
+    console.error("Error fetching home page services:", error);
+    throw error; // Propagate the error to be handled in the calling component
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1919,17 +1987,20 @@ export function persistLastPayment(payload: LastPaymentPayload) {
 export async function createRyftSessionApi(params: {
   amountMinor: number;
   currency: string;
-  reference: string;
+  order_id: string;
   description?: string;
 }): Promise<string> {
-  const res = await fetch("/api/pay/ryft/session", {
+  const base = getBackendBase(); // Dynamically get the backend base URL
+
+  const res = await fetch(`${base}/payments/create-intent`, {
+    // Use dynamic base
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       amount: params.amountMinor,
       currency: params.currency,
       description: params.description ?? "Clinic payment",
-      reference: params.reference,
+      order_id: params.order_id,
     }),
     cache: "no-store",
   });
@@ -2347,7 +2418,9 @@ export async function fetchDynamicHomePage(
     if (!response.ok) {
       // Log response status and the URL that failed
       console.error(`Error: ${response.status} - ${response.statusText}`);
-      throw new Error(`Failed to fetch dynamic home page content: ${response.statusText}`);
+      throw new Error(
+        `Failed to fetch dynamic home page content: ${response.statusText}`
+      );
     }
 
     // Parse and return the JSON response
@@ -2360,7 +2433,6 @@ export async function fetchDynamicHomePage(
     throw error; // Rethrow for handling in page.tsx
   }
 }
-
 
 /* ------------------------------------------------------------------ */
 /*                             Email send API                         */

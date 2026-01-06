@@ -45,11 +45,6 @@ export default function HomePage() {
     handleClientSideFetch();
   }, []);
 
-  // If content is still loading, display a loading message
-  if (loading) {
-    return <div>Loading content...</div>;
-  }
-
   return (
     <>
       <Hero data={content?.hero} />
