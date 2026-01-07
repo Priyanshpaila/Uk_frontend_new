@@ -62,7 +62,10 @@ ENV PORT=8002
 ENV NEXT_PUBLIC_BASE_URL=https://pharma-health.co.uk/api
 ENV NEXT_PUBLIC_ONLY_URL=pharma-health.co.uk/api
 
+ENV NEXT_PUBLIC_RYFT_PUBLIC_KEY=pk_V/Fl3ZKgM8Fm/t4pDGeP5fEUq4S/p3gkmWCyVYkmXPSJBheWtrdrQmQdPq4Ew7RC
+ENV NEXT_PUBLIC_CONSULTATION_CURRENCY=GBP
 
+ENV NEXT_PUBLIC_LOGIN_URL=https://middlestown-pharmacy.co.uk
 
 
 # Create non-root user
