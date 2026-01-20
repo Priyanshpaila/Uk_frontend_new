@@ -613,10 +613,12 @@ const paymentOdrId = useMemo(() => orderId ?? "default_order_id", [orderId]);
   // =========================
   const [error, setError] = useState<string | null>(null);
   const [initialising, setInitialising] = useState(false);
-  const [clientSecret, setClientSecret] = useState<string | null>(null);
+ const [clientSecret, setClientSecret] = useState<string | null>(null);
+const [ryftPublicKey, setRyftPublicKey] = useState<string | null>(null);
   const [cardValid, setCardValid] = useState(false);
   const [sdkReady, setSdkReady] = useState(false);
   const [showPay, setShowPay] = useState(false);
+  const ryftInitOnceRef = useRef(false);
 
   const revealPay = () => {
     setShowPay(true);
@@ -630,76 +632,173 @@ const paymentOdrId = useMemo(() => orderId ?? "default_order_id", [orderId]);
     }, 0);
   };
 
-  useEffect(() => {
-    let cancelled = false;
+  // useEffect(() => {
+  //   let cancelled = false;
 
-    async function setupRyft() {
-      try {
-        setInitialising(true);
-        setError(null);
-        const totalAmountInMinorUnits = totals.totalMinor;
+  //   async function setupRyft() {
+  //     try {
+  //       setInitialising(true);
+  //       setError(null);
+  //       const totalAmountInMinorUnits = totals.totalMinor;
 
-        const secret = await createRyftSessionApi({
-          amountMinor: totalAmountInMinorUnits,
-          currency: process.env.NEXT_PUBLIC_CONSULTATION_CURRENCY || "GBP",
-          order_id: paymentOdrId,
-          description: "Clinic payment",
-        });
+  //       const secret = await createRyftSessionApi({
+  //         amountMinor: totalAmountInMinorUnits,
+  //         currency: process.env.NEXT_PUBLIC_CONSULTATION_CURRENCY || "GBP",
+  //         order_id: paymentOdrId,
+  //         description: "Clinic payment",
+  //       });
 
-        if (cancelled) return;
-        setClientSecret(secret);
+  //       if (cancelled) return;
+  //       setClientSecret(secret);
 
-        await ensureRyftSdkLoaded();
-        if (cancelled) return;
+  //       await ensureRyftSdkLoaded();
+  //       if (cancelled) return;
 
-        const Ryft: any = (window as any).Ryft;
-        const publicKey = process.env.NEXT_PUBLIC_RYFT_PUBLIC_KEY;
-        if (!publicKey) throw new Error("Missing NEXT_PUBLIC_RYFT_PUBLIC_KEY");
+  //       const Ryft: any = (window as any).Ryft;
+  //       const publicKey = process.env.NEXT_PUBLIC_RYFT_PUBLIC_KEY;
+  //       if (!publicKey) throw new Error("Missing NEXT_PUBLIC_RYFT_PUBLIC_KEY");
 
-        Ryft.init({
-          publicKey,
-          clientSecret: secret,
-          applePay: {
-            merchantName: "Safescript Pharmacy",
-            merchantCountryCode: "GB",
-          },
-          googlePay: {
-            merchantIdentifier: "merchant_safescript",
-            merchantName: "Safescript Pharmacy",
-            merchantCountryCode: "GB",
-          },
-          fieldCollection: {
-            billingAddress: { display: "full" },
-          },
-          style: {
-            borderRadius: 8,
-            backgroundColor: "#ffffff",
-            borderColor: "#e5e7eb",
-            padding: 12,
-            color: "#111827",
-            focusColor: "#111827",
-            bodyColor: "#ffffff",
-          },
-        });
+  //       Ryft.init({
+  //         publicKey,
+  //         clientSecret: secret,
+  //         applePay: {
+  //           merchantName: "Safescript Pharmacy",
+  //           merchantCountryCode: "GB",
+  //         },
+  //         googlePay: {
+  //           merchantIdentifier: "merchant_safescript",
+  //           merchantName: "Safescript Pharmacy",
+  //           merchantCountryCode: "GB",
+  //         },
+  //         fieldCollection: {
+  //           billingAddress: { display: "full" },
+  //         },
+  //         style: {
+  //           borderRadius: 8,
+  //           backgroundColor: "#ffffff",
+  //           borderColor: "#e5e7eb",
+  //           padding: 12,
+  //           color: "#111827",
+  //           focusColor: "#111827",
+  //           bodyColor: "#ffffff",
+  //         },
+  //       });
 
-        Ryft.addEventHandler("cardValidationChanged", (e: any) => {
-          setCardValid(Boolean(e?.isValid));
-        });
+  //       Ryft.addEventHandler("cardValidationChanged", (e: any) => {
+  //         setCardValid(Boolean(e?.isValid));
+  //       });
 
-        setSdkReady(true);
-      } catch (e: any) {
-        if (!cancelled) setError(e?.message || "Failed to initialise payments");
-      } finally {
-        if (!cancelled) setInitialising(false);
+  //       setSdkReady(true);
+  //     } catch (e: any) {
+  //       if (!cancelled) setError(e?.message || "Failed to initialise payments");
+  //     } finally {
+  //       if (!cancelled) setInitialising(false);
+  //     }
+  //   }
+
+  //   if (totals.totalMinor > 0 && showPay) setupRyft();
+
+  //   return () => {
+  //     cancelled = true;
+  //   };
+  // }, [totals.totalMinor, showPay, paymentRef]);
+
+
+useEffect(() => {
+  let cancelled = false;
+
+  async function setupRyft() {
+    try {
+      setInitialising(true);
+      setError(null);
+
+      if (!orderId) throw new Error("Order not ready yet");
+      const amountMinor = totals.totalMinor;
+      if (!amountMinor || amountMinor < 1) throw new Error("Invalid payment amount");
+
+      // ? create-intent returns an OBJECT now (snake_case from backend)
+      const session = await createRyftSessionApi({
+        amountMinor,
+        currency: "GBP", // keep fixed or use env
+        order_id: orderId,
+        description: "Clinic payment",
+      });
+
+      if (cancelled) return;
+
+      // ? set string secret + optional public key
+      setClientSecret(session.client_secret);
+      setRyftPublicKey(session.public_key ?? null);
+
+      await ensureRyftSdkLoaded();
+      if (cancelled) return;
+
+      const Ryft: any = (window as any).Ryft;
+
+      // Prefer backend public_key; fallback to env only if backend returned null
+      const publicKey = session.public_key || process.env.NEXT_PUBLIC_RYFT_PUBLIC_KEY;
+      if (!publicKey) {
+        throw new Error(
+          "Missing Ryft public key. Backend did not return public_key and NEXT_PUBLIC_RYFT_PUBLIC_KEY is not set."
+        );
       }
+
+      Ryft.init({
+        publicKey,
+        clientSecret: session.client_secret,
+        applePay: {
+          merchantName: "Safescript Pharmacy",
+          merchantCountryCode: "GB",
+        },
+        googlePay: {
+          merchantIdentifier: "merchant_safescript",
+          merchantName: "Safescript Pharmacy",
+          merchantCountryCode: "GB",
+        },
+        fieldCollection: {
+          billingAddress: { display: "full" },
+        },
+        style: {
+          borderRadius: 8,
+          backgroundColor: "#ffffff",
+          borderColor: "#e5e7eb",
+          padding: 12,
+          color: "#111827",
+          focusColor: "#111827",
+          bodyColor: "#ffffff",
+        },
+      });
+
+      Ryft.addEventHandler("cardValidationChanged", (e: any) => {
+        setCardValid(Boolean(e?.isValid));
+      });
+
+      setSdkReady(true);
+    } catch (e: any) {
+      // allow retry if init failed
+      ryftInitOnceRef.current = false;
+      if (!cancelled) setError(e?.message || "Failed to initialise payments");
+    } finally {
+      if (!cancelled) setInitialising(false);
     }
+  }
 
-    if (totals.totalMinor > 0 && showPay) setupRyft();
+  // init only after user clicks “Pay securely”
+  if (!showPay) return;
+  if (!orderId) return;
+  if (totals.totalMinor < 1) return;
 
-    return () => {
-      cancelled = true;
-    };
-  }, [totals.totalMinor, showPay, paymentRef]);
+  // prevent multiple session creations
+  if (ryftInitOnceRef.current) return;
+  ryftInitOnceRef.current = true;
+
+  setupRyft();
+
+  return () => {
+    cancelled = true;
+  };
+}, [showPay, orderId, totals.totalMinor]);
+
 
 if (!totals.lines.length) {
   return (

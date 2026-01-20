@@ -1984,23 +1984,118 @@ export function persistLastPayment(payload: LastPaymentPayload) {
  * Call your Next.js API route that creates a Ryft payment session.
  * Must be implemented in /app/api/pay/ryft/session/route.ts
  */
+// export async function createRyftSessionApi(params: {
+//   amountMinor: number;
+//   currency: string;
+//   order_id: string;
+//   description?: string;
+// }): Promise<string> {
+//   const base = getBackendBase(); // Dynamically get the backend base URL
+
+//   const res = await fetch(`${base}/payments/create-intent`, {
+//     // Use dynamic base
+//     method: "POST",
+//     headers: { "Content-Type": "application/json" },
+//     body: JSON.stringify({
+//       amount: params.amountMinor,
+//       currency: params.currency,
+//       description: params.description ?? "Clinic payment",
+//       order_id: params.order_id,
+//     }),
+//     cache: "no-store",
+//   });
+
+//   const text = await res.text();
+//   let data: any = {};
+//   try {
+//     data = text ? JSON.parse(text) : {};
+//   } catch {
+//     data = {};
+//   }
+
+//   const friendly = (s: string) => {
+//     if (!s) return "";
+//     const trimmed = s.trim();
+//     if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
+//       return "Could not create payment session (404). Is /api/pay/ryft/session implemented and reachable?";
+//     }
+//     return trimmed.slice(0, 400);
+//   };
+
+//   if (!res.ok) {
+//     const msg = friendly(
+//       data?.detail ||
+//         data?.message ||
+//         text ||
+//         "Could not create payment session"
+//     );
+//     throw new Error(msg);
+//   }
+
+//   const secret = data?.clientSecret;
+//   if (!secret) {
+//     throw new Error("Server did not return clientSecret");
+//   }
+
+//   return secret;
+// }
+
+
+// api.ts
+
+type CreateRyftSessionResult = {
+  order_id: string;
+  payment_session_id: string;
+  client_secret: string;
+  amount: number;
+  currency: string;
+  public_key: string | null;
+  sandbox: boolean;
+};
+
+function getAuthHeaderIfPresent(): Record<string, string> {
+  // Optional: add Bearer token if your backend later protects this endpoint.
+  // Your current curl/test works without auth, so this is safe.
+  try {
+    const token =
+      typeof window !== "undefined"
+        ? window.localStorage.getItem("session_token")
+        : null;
+
+    if (token && token !== "undefined" && token !== "null") {
+      return { Authorization: `Bearer ${token}` };
+    }
+  } catch {}
+  return {};
+}
+
+/**
+ * Calls Nest backend: POST /payments/create-intent
+ * Backend response fields are snake_case:
+ *  - client_secret
+ *  - public_key
+ *  - payment_session_id
+ */
 export async function createRyftSessionApi(params: {
   amountMinor: number;
   currency: string;
   order_id: string;
   description?: string;
-}): Promise<string> {
-  const base = getBackendBase(); // Dynamically get the backend base URL
+}): Promise<CreateRyftSessionResult> {
+  const base = getBackendBase().replace(/\/+$/, "");
+  const url = `${base}/payments/create-intent`;
 
-  const res = await fetch(`${base}/payments/create-intent`, {
-    // Use dynamic base
+  const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...getAuthHeaderIfPresent(),
+    },
     body: JSON.stringify({
-      amount: params.amountMinor,
-      currency: params.currency,
-      description: params.description ?? "Clinic payment",
       order_id: params.order_id,
+      amount: params.amountMinor, // backend expects "amount"
+      currency: params.currency,
+      description: params.description,
     }),
     cache: "no-store",
   });
@@ -2013,32 +2108,36 @@ export async function createRyftSessionApi(params: {
     data = {};
   }
 
-  const friendly = (s: string) => {
-    if (!s) return "";
-    const trimmed = s.trim();
-    if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
-      return "Could not create payment session (404). Is /api/pay/ryft/session implemented and reachable?";
-    }
-    return trimmed.slice(0, 400);
-  };
-
   if (!res.ok) {
-    const msg = friendly(
+    const msg =
+      data?.message ||
+      data?.error ||
       data?.detail ||
-        data?.message ||
-        text ||
-        "Could not create payment session"
-    );
+      (typeof text === "string" ? text.slice(0, 500) : "") ||
+      "Could not create payment session";
     throw new Error(msg);
   }
 
-  const secret = data?.clientSecret;
-  if (!secret) {
-    throw new Error("Server did not return clientSecret");
-  }
+  // Support both snake_case (your backend) and camelCase (if anything changes later)
+  const client_secret = data?.client_secret ?? data?.clientSecret;
+  const payment_session_id = data?.payment_session_id ?? data?.paymentSessionId;
+  const public_key = data?.public_key ?? data?.publicKey ?? null;
 
-  return secret;
+  if (!client_secret) throw new Error("Server did not return client_secret");
+  if (!payment_session_id) throw new Error("Server did not return payment_session_id");
+
+  return {
+    order_id: data?.order_id ?? params.order_id,
+    payment_session_id,
+    client_secret,
+    amount: data?.amount ?? params.amountMinor,
+    currency: data?.currency ?? params.currency,
+    public_key,
+    sandbox: Boolean(data?.sandbox),
+  };
 }
+
+
 
 /**
  * Wait until the Ryft SDK script has attached window.Ryft
